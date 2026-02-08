@@ -77,7 +77,11 @@ target/
 celerybeat-schedule
 
 # dotenv
-.env
+configs/envs/.env.local
+configs/envs/.env.dev
+configs/envs/.env.prod
+
+!configs/envs/.env.example
 
 # virtualenv
 venv/

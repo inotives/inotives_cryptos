@@ -1,0 +1,21 @@
+inotives_cryptos:
+  target: "{{ env_var('DBT_TARGET'), 'dev' }}"
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('DB_HOST', 'localhost') }}"
+      user: "{{ env_var('DB_USER') }}"
+      pass: "{{ env_var('DB_PASS') }}"
+      port: {{ env_var('DB_PORT', '5435') | int }}
+      dbname: "{{ env_var('DB_NAME') }}"
+      schema: public
+      threads: {{ env_var('DBT_THREADS', '1') | int }}
+    staging:
+      type: postgres
+      host: "{{ env_var('STAGING_DB_HOST', 'localhost') }}"
+      user: "{{ env_var('STAGING_DB_USER') }}"
+      pass: "{{ env_var('STAGING_DB_PASS') }}"
+      port: 5432
+      dbname: inotives_staging
+      schema: analytics
+      threads: 4

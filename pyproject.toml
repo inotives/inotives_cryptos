@@ -1,0 +1,25 @@
+[project]
+name="inotives-cryptos"
+version="0.1.0"
+description="Monorepo project for my cryptos related stuffs"
+readme="README.md"
+requires-python=">=3.12"
+dependencies=[
+    "fastapi[standard]>=0.115.0",
+    "sqlalchemy>2.0.0",
+    "psycopg2-binary>=2.9.9",
+    "pydantic-settings>=2.2.0",
+]
+
+[build-system]
+requires=["hatchling"]
+build-backend="hatchling.build"
+
+[tool.uv]
+# This defines which folders are part of the monerepo
+workspace = { members = ["analytics"] } # removing "apps/*" for now, only in analytics
+package=false # temp disable package
+
+[tool.uv.sources]
+# This allow your API to import code from a shared lib if you add one later
+core = { workspace = true }

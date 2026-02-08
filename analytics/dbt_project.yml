@@ -1,0 +1,28 @@
+name: 'inotives_cryptos'
+version: '1.0.0'
+config-version: 2
+
+# this MUST match the top level name in your profiles.yml
+profile: 'inotives_cryptos'
+
+# Where dbt looks for your files
+model-paths: ['models']
+analysis-paths: ['analyses']
+test-paths: ['tests']
+seed-paths: ['tests']
+macro-paths: ['macros']
+
+# clean up these folder when running dbt clean
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+# Default config for models
+models:
+  inotives_cryptos:
+    # everything in models/staging will be a view by default
+    staging:
+      +materialized: view
+    # everything in model/marts will be a table by default
+    marts:
+      +materialized: table
