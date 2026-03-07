@@ -1,17 +1,51 @@
 services:
-  postgres:
-    image: postgres:16-alpine
-    container_name: inotives_db
+  # The Core Database (TimescaleDB for high-performance crypto time-series)
+  db:
+    image: timescale/timescaledb:latest-pg16
+    container_name: ${DB_CONTAINER_NAME}
     restart: always
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: app_db
+      - POSTGRES_USER=${DB_USER}
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_DB=${DB_NAME}
     ports:
-      - "5435:5432" # <--- map 5432 to local port 5435
+      - "${DB_PORT}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - inotives_postgres_data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d inotives_data"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # prefect:
+  #   image: prefecthq/prefect:2-python3.11
+  #   container_name: inotives_prefect
+  #   restart: always
+  #   entrypoint: ["prefect", "server", "start"]
+  #   environment:
+  #     - PREFECT_UI_API_URL=http://localhost:4200/api
+  #     - PREFECT_API_URL=http://localhost:4200/api
+  #     # Store Prefect's internal data in your DB
+  #     - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/prefect_internal
+  #   ports:
+  #     - "4200:4200"
+  #   depends_on:
+  #     db:
+  #       condition: service_healthy
+
+  # # This is the "Data Engineer Agent" worker
+  # worker_data_eng:
+  #   image: prefecthq/prefect:2-python3.11
+  #   container_name: worker_data_eng
+  #   restart: always
+  #   entrypoint: ["prefect", "worker", "start", "--pool", "data-eng-pool"]
+  #   environment:
+  #     - PREFECT_API_URL=http://prefect:4200/api
+  #   depends_on:
+  #     - prefect
+
 
 volumes:
-  postgres_data:
+  inotives_postgres_data:

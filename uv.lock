@@ -4,8 +4,8 @@ requires-python = ">=3.12"
 
 [manifest]
 members = [
-    "inotives-cryptos",
     "inotives-cryptos-analytics",
+    "inotives-data",
 ]
 
 [[package]]
@@ -613,7 +613,22 @@ wheels = [
 ]
 
 [[package]]
-name = "inotives-cryptos"
+name = "inotives-cryptos-analytics"
+version = "0.1.0"
+source = { virtual = "analytics" }
+dependencies = [
+    { name = "dbt-core" },
+    { name = "dbt-postgres" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "dbt-core", specifier = ">=1.8.0" },
+    { name = "dbt-postgres", specifier = ">=1.8.0" },
+]
+
+[[package]]
+name = "inotives-data"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
@@ -629,21 +644,6 @@ requires-dist = [
     { name = "psycopg2-binary", specifier = ">=2.9.9" },
     { name = "pydantic-settings", specifier = ">=2.2.0" },
     { name = "sqlalchemy", specifier = ">2.0.0" },
-]
-
-[[package]]
-name = "inotives-cryptos-analytics"
-version = "0.1.0"
-source = { virtual = "analytics" }
-dependencies = [
-    { name = "dbt-core" },
-    { name = "dbt-postgres" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "dbt-core", specifier = ">=1.8.0" },
-    { name = "dbt-postgres", specifier = ">=1.8.0" },
 ]
 
 [[package]]

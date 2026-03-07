@@ -1,7 +1,7 @@
 [project]
-name="inotives-cryptos"
+name="inotives_data"
 version="0.1.0"
-description="Monorepo project for my cryptos related stuffs"
+description="Monorepo project for my data related stuffs"
 readme="README.md"
 requires-python=">=3.12"
 dependencies=[
