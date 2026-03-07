@@ -4,7 +4,7 @@
 
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'user_status') THEN
-        CREATE TYPE base.user_status AS ENUM ('active', 'suspend', 'deleted');
+        CREATE TYPE base.user_status AS ENUM ('active', 'suspend', 'deleted', 'pending');
     END IF;
 END $$;
 
@@ -16,6 +16,7 @@ CREATE TABLE base.users (
     display_name TEXT,
     role TEXT NOT NULL DEFAULT 'user',  -- will create a seperate table for roles and permissions in future, for now keep in simple. 
     status base.user_status NOT NULL DEFAULT 'active',
+    metadata JSONB DEFAULT '{}' NOT NULL, -- Flexible field for some use details.
     
     -- Audit fields
     created_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
@@ -25,7 +26,8 @@ CREATE TABLE base.users (
     deleted_at TIMESTAMPTZ,
     deleted_by BIGINT REFERENCES base.users(id) DEFERRABLE INITIALLY DEFERRED,
 
-    -- Temporal field
+    -- Temporal / versioning fields
+    version    INTEGER   NOT NULL DEFAULT 1,
     sys_period TSTZRANGE NOT NULL DEFAULT TSTZRANGE(current_timestamp, null),
 
     -- Ownership/Audit references
@@ -38,9 +40,16 @@ CREATE TABLE base.users (
     )
 );
 
--- 3. Create history table
+-- 3. Create history table (mirrors main table + change metadata columns)
 CREATE TABLE base.users_history (LIKE base.users INCLUDING DEFAULTS);
+ALTER TABLE base.users_history
+    ADD COLUMN changed_at  TIMESTAMPTZ,
+    ADD COLUMN changed_by  BIGINT,
+    ADD COLUMN change_type TEXT,
+    ADD COLUMN changes     JSONB;
 CREATE INDEX ON base.users_history (sys_period);
+CREATE INDEX ON base.users_history (changed_at);
+CREATE INDEX ON base.users_history (changed_by);
 
 -- 4. Attach Triggers
 -- A. Auditing (Timestamps)
@@ -56,7 +65,7 @@ CREATE TRIGGER soft_delete_trigger_users
 -- C. Versioning (Archive old rows to history)
 -- Note: versioning function expects: history_table_name
 CREATE TRIGGER versioning_trigger_users
-    BEFORE INSERT OR UPDATE OR DELETE ON base.users
+    BEFORE UPDATE OR DELETE ON base.users
     FOR EACH ROW EXECUTE PROCEDURE base.versioning('base.users_history');
 
 -- 5. SEED initial system user
@@ -74,5 +83,5 @@ ALTER TABLE base.users ENABLE TRIGGER ALL;
 
 -- migrate:down
 DROP TABLE IF EXISTS base.users_history;
-DROP TABLE IF EXISTS base.users;
+DROP TABLE IF EXISTS base.users CASCADE;
 DROP TYPE IF EXISTS base.user_status;
