@@ -100,7 +100,8 @@ ENV/
 [Ll]ib
 [Ll]ib64
 [Ll]ocal
-[Ss]cripts
+# [Ss]cripts  # re-enabled: project uses scripts/ for seeding utilities
+!scripts/
 pyvenv.cfg
 .venv
 pip-selfcheck.json
