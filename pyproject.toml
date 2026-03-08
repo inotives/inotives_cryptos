@@ -9,6 +9,7 @@ dependencies=[
     "sqlalchemy>2.0.0",
     "psycopg2-binary>=2.9.9",
     "pydantic-settings>=2.2.0",
+    "asyncpg>=0.31.0",
 ]
 
 [build-system]
@@ -17,7 +18,7 @@ build-backend="hatchling.build"
 
 [tool.uv]
 # This defines which folders are part of the monerepo
-workspace = { members = ["analytics"] } # removing "apps/*" for now, only in analytics
+workspace = { members = ["analytics", "apps/bots", "apps/fetchers"] }
 package=false # temp disable package
 
 [tool.uv.sources]

@@ -1,5 +1,5 @@
 services:
-  # The Core Database (TimescaleDB for high-performance crypto time-series)
+  # ── Core Database (TimescaleDB) ───────────────────────────────────────────
   db:
     image: timescale/timescaledb:latest-pg16
     container_name: ${DB_CONTAINER_NAME}
@@ -14,38 +14,51 @@ services:
       - inotives_postgres_data:/var/lib/postgresql/data
       - ./db/init:/docker-entrypoint-initdb.d
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U admin -d inotives_data"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # prefect:
-  #   image: prefecthq/prefect:2-python3.11
-  #   container_name: inotives_prefect
-  #   restart: always
-  #   entrypoint: ["prefect", "server", "start"]
-  #   environment:
-  #     - PREFECT_UI_API_URL=http://localhost:4200/api
-  #     - PREFECT_API_URL=http://localhost:4200/api
-  #     # Store Prefect's internal data in your DB
-  #     - PREFECT_API_DATABASE_CONNECTION_URL=postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/prefect_internal
-  #   ports:
-  #     - "4200:4200"
-  #   depends_on:
-  #     db:
-  #       condition: service_healthy
+  # ── Prefect Orchestration Server ──────────────────────────────────────────
+  prefect:
+    image: prefecthq/prefect:3-python3.12
+    container_name: inotives_prefect
+    restart: always
+    command: prefect server start --host 0.0.0.0
+    environment:
+      - PREFECT_SERVER_DATABASE_CONNECTION_URL=postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/prefect_internal
+      - PREFECT_API_URL=http://localhost:4200/api
+    ports:
+      - "4200:4200"
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
 
-  # # This is the "Data Engineer Agent" worker
-  # worker_data_eng:
-  #   image: prefecthq/prefect:2-python3.11
-  #   container_name: worker_data_eng
-  #   restart: always
-  #   entrypoint: ["prefect", "worker", "start", "--pool", "data-eng-pool"]
-  #   environment:
-  #     - PREFECT_API_URL=http://prefect:4200/api
-  #   depends_on:
-  #     - prefect
-
+  # ── Fetcher Worker (runs Prefect flows) ───────────────────────────────────
+  fetcher-worker:
+    build:
+      context: apps/pipelines
+      dockerfile: Dockerfile
+    container_name: inotives_fetcher_worker
+    restart: always
+    command: prefect worker start --pool data-eng-pool --type process
+    environment:
+      - PREFECT_API_URL=http://prefect:4200/api
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+      - COINGECKO_API_KEY=${COINGECKO_API_KEY}
+      - COINMARKETCAP_API_KEY=${COINMARKETCAP_API_KEY}
+    depends_on:
+      prefect:
+        condition: service_healthy
 
 volumes:
   inotives_postgres_data:

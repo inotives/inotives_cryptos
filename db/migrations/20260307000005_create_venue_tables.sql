@@ -101,7 +101,7 @@ CREATE TABLE base.venue_balances (
     id              BIGSERIAL PRIMARY KEY,
     venue_id        BIGINT NOT NULL REFERENCES base.venues(id)         DEFERRABLE INITIALLY DEFERRED,
     asset_id        BIGINT NOT NULL REFERENCES base.assets(id)         DEFERRABLE INITIALLY DEFERRED,
-    network_asset_id BIGINT REFERENCES base.network_assets(id)         DEFERRABLE INITIALLY DEFERRED,  -- NULL for CeFi
+    network_asset_id BIGINT REFERENCES base.assets(id)                 DEFERRABLE INITIALLY DEFERRED,  -- NULL for CeFi; points to network-specific asset row
 
     balance      NUMERIC(36, 18) NOT NULL DEFAULT 0,
     balance_usd  NUMERIC(36, 2),          -- USD value at last sync (nullable)

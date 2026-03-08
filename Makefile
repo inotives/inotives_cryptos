@@ -12,7 +12,8 @@ DB_URL_STR = postgres://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAM
 DBMATE = uv run --env-file $(ENV_PATH) uvx --from dbmate-bin dbmate --url "$(DB_URL_STR)"
 
 
-.PHONY: init devon services-up services-down migrate-up migrate-down migrate-status
+.PHONY: init devon services-up services-down migrate-up migrate-down migrate-status \
+        prefect-deploy prefect-ui
 
 # 1. Setup the workspace
 # initial setup when cloning the repo
@@ -43,3 +44,25 @@ migrate-down:
 
 migrate-status:
 	$(DBMATE) status
+
+# 4. Seeding
+seed-networks:
+	uv run --env-file $(ENV_PATH) python scripts/seed_networks_from_csv.py
+
+seed-networks-dry:
+	uv run --env-file $(ENV_PATH) python scripts/seed_networks_from_csv.py --dry-run
+
+seed-assets:
+	uv run --env-file $(ENV_PATH) python scripts/seed_assets_from_csv.py
+
+seed-assets-dry:
+	uv run --env-file $(ENV_PATH) python scripts/seed_assets_from_csv.py --dry-run
+
+# 5. Prefect
+# Register all fetcher flow deployments with the running Prefect server
+prefect-deploy:
+	PREFECT_API_URL=http://localhost:4200/api uv run --env-file $(ENV_PATH) python -m src.main
+
+# Open the Prefect UI in the default browser
+prefect-ui:
+	open http://localhost:4200
