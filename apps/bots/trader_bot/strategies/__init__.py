@@ -12,9 +12,11 @@ Adding a new strategy:
 
 from .base import BaseStrategy
 from .dca_grid import DcaGridStrategy
+from .trend_following import TrendFollowingStrategy
 
 _REGISTRY: dict[str, BaseStrategy] = {
-    DcaGridStrategy.strategy_type: DcaGridStrategy(),
+    DcaGridStrategy.strategy_type:       DcaGridStrategy(),
+    TrendFollowingStrategy.strategy_type: TrendFollowingStrategy(),
 }
 
 

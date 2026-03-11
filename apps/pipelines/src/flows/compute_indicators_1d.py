@@ -6,11 +6,12 @@ and upserts results into base.asset_indicators_1d.
 
 Indicators computed:
   Volatility  : ATR(14), ATR(20), ATR%(14), ATR SMA(20), volatility_regime
-  Trend MAs   : SMA(20), SMA(50), SMA(200), EMA(12), EMA(26)
+  Trend MAs   : SMA(20), SMA(50), SMA(200), EMA(12), EMA(26), EMA(50), EMA(200)
   MACD        : MACD line, signal(9), histogram
   Momentum    : RSI(14)
   Bands       : Bollinger Bands(20, 2σ), BB width %
   Volume      : Volume SMA(20), volume ratio
+  Regime      : ADX(14), EMA slope 5d%, volatility ratio ATR(14)/StdDev(14)
 
 Schedule: daily, after OHLCV data has been fetched (runs after fetch pipelines).
 """
@@ -56,7 +57,7 @@ async def load_ohlcv(asset_id: int, lookback_days: int = 400) -> pd.DataFrame:
             FROM base.asset_metrics_1d
             WHERE asset_id = $1
               AND is_final  = true
-            ORDER BY metric_date ASC
+            ORDER BY metric_date DESC
             LIMIT $2
             """,
             asset_id, lookback_days,
@@ -73,6 +74,8 @@ async def load_ohlcv(asset_id: int, lookback_days: int = 400) -> pd.DataFrame:
     df[["open", "high", "low", "close", "volume"]] = df[
         ["open", "high", "low", "close", "volume"]
     ].astype(float)
+    # Rows arrived newest-first; reverse to chronological order for indicator computation
+    df = df.sort_values("date").reset_index(drop=True)
 
     logger.info("Loaded %d OHLCV rows for asset_id=%d.", len(df), asset_id)
     return df
@@ -121,6 +124,8 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["sma_200"] = ta.sma(df["close"], length=200)
     out["ema_12"]  = ta.ema(df["close"], length=12)
     out["ema_26"]  = ta.ema(df["close"], length=26)
+    out["ema_50"]  = ta.ema(df["close"], length=50)
+    out["ema_200"] = ta.ema(df["close"], length=200)
 
     # ── MACD ──────────────────────────────────────────────────────────────────
     macd_df = ta.macd(df["close"], fast=12, slow=26, signal=9)
@@ -148,6 +153,25 @@ def compute_indicators(df: pd.DataFrame) -> pd.DataFrame:
     # ── Volume ────────────────────────────────────────────────────────────────
     out["volume_sma_20"] = df["volume"].rolling(window=20, min_periods=20).mean().round(2)
     out["volume_ratio"]  = (df["volume"] / out["volume_sma_20"]).round(6)
+
+    # ── Regime Detection ──────────────────────────────────────────────────────
+    # ADX(14) — trend strength (0–100, direction-agnostic)
+    adx_df = ta.adx(df["high"], df["low"], df["close"], length=14)
+    if adx_df is not None and not adx_df.empty:
+        out["adx_14"] = adx_df.iloc[:, 0].round(6)  # ADX_14
+    else:
+        out["adx_14"] = None
+
+    # EMA slope 5d% — rate of change of EMA(50) over 5 days
+    # Formula: ((EMA50_today - EMA50_5d_ago) / EMA50_5d_ago) * 100
+    ema50_shifted = out["ema_50"].shift(5)
+    out["ema_slope_5d"] = ((out["ema_50"] - ema50_shifted) / ema50_shifted * 100).round(6)
+
+    # Volatility ratio — ATR(14) / StdDev(Close, 14)
+    # Low ratio (<0.8) → smooth trending move (high regime score)
+    # High ratio (>1.2) → choppy, mean-reverting noise (low regime score)
+    stddev_14 = df["close"].rolling(window=14, min_periods=14).std()
+    out["vol_ratio_14"] = (out["atr_14"] / stddev_14).round(6)
 
     return out
 
@@ -213,19 +237,21 @@ async def upsert_indicators(
                 INSERT INTO base.asset_indicators_1d (
                     asset_id, metric_date,
                     atr_14, atr_20, atr_pct, atr_sma_20, volatility_regime,
-                    sma_20, sma_50, sma_200, ema_12, ema_26,
+                    sma_20, sma_50, sma_200, ema_12, ema_26, ema_50, ema_200,
                     macd, macd_signal, macd_hist,
                     rsi_14,
                     bb_upper, bb_middle, bb_lower, bb_width,
-                    volume_sma_20, volume_ratio
+                    volume_sma_20, volume_ratio,
+                    adx_14, ema_slope_5d, vol_ratio_14
                 ) VALUES (
                     $1, $2,
                     $3, $4, $5, $6, $7,
-                    $8, $9, $10, $11, $12,
-                    $13, $14, $15,
-                    $16,
-                    $17, $18, $19, $20,
-                    $21, $22
+                    $8, $9, $10, $11, $12, $13, $14,
+                    $15, $16, $17,
+                    $18,
+                    $19, $20, $21, $22,
+                    $23, $24,
+                    $25, $26, $27
                 )
                 ON CONFLICT (asset_id, metric_date) DO UPDATE SET
                     atr_14            = EXCLUDED.atr_14,
@@ -238,6 +264,8 @@ async def upsert_indicators(
                     sma_200           = EXCLUDED.sma_200,
                     ema_12            = EXCLUDED.ema_12,
                     ema_26            = EXCLUDED.ema_26,
+                    ema_50            = EXCLUDED.ema_50,
+                    ema_200           = EXCLUDED.ema_200,
                     macd              = EXCLUDED.macd,
                     macd_signal       = EXCLUDED.macd_signal,
                     macd_hist         = EXCLUDED.macd_hist,
@@ -247,7 +275,10 @@ async def upsert_indicators(
                     bb_lower          = EXCLUDED.bb_lower,
                     bb_width          = EXCLUDED.bb_width,
                     volume_sma_20     = EXCLUDED.volume_sma_20,
-                    volume_ratio      = EXCLUDED.volume_ratio
+                    volume_ratio      = EXCLUDED.volume_ratio,
+                    adx_14            = EXCLUDED.adx_14,
+                    ema_slope_5d      = EXCLUDED.ema_slope_5d,
+                    vol_ratio_14      = EXCLUDED.vol_ratio_14
                 """,
                 asset_id, row["date"].date(),
                 _float(row.get("atr_14")),    _float(row.get("atr_20")),
@@ -255,13 +286,16 @@ async def upsert_indicators(
                 _str(row.get("volatility_regime")),
                 _float(row.get("sma_20")),    _float(row.get("sma_50")),
                 _float(row.get("sma_200")),   _float(row.get("ema_12")),
-                _float(row.get("ema_26")),
+                _float(row.get("ema_26")),    _float(row.get("ema_50")),
+                _float(row.get("ema_200")),
                 _float(row.get("macd")),      _float(row.get("macd_signal")),
                 _float(row.get("macd_hist")),
                 _float(row.get("rsi_14")),
                 _float(row.get("bb_upper")),  _float(row.get("bb_middle")),
                 _float(row.get("bb_lower")),  _float(row.get("bb_width")),
                 _float(row.get("volume_sma_20")), _float(row.get("volume_ratio")),
+                _float(row.get("adx_14")),    _float(row.get("ema_slope_5d")),
+                _float(row.get("vol_ratio_14")),
             )
             upserted += 1
 
@@ -307,7 +341,7 @@ async def compute_indicators_backfill_flow(asset_codes: list[str] | None = None)
 
     for asset in assets:
         logger.info("Processing asset: %s (id=%d)", asset["code"], asset["id"])
-        df = await load_ohlcv(asset["id"], lookback_days=2000)
+        df = await load_ohlcv(asset["id"], lookback_days=99_999)
         if df.empty or len(df) < MIN_ROWS_REQUIRED:
             logger.warning(
                 "Skipping %s — only %d rows (need %d).",
