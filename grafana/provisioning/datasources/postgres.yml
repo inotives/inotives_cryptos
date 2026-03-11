@@ -1,0 +1,21 @@
+apiVersion: 1
+
+datasources:
+  - name: inotives_db
+    uid: inotives_timescaledb
+    type: postgres
+    url: db:5432
+    user: ${DB_USER}
+    secureJsonData:
+      password: ${DB_PASSWORD}
+    jsonData:
+      database: ${DB_NAME}
+      sslmode: disable
+      postgresVersion: 1600
+      timescaledb: true
+      maxOpenConns: 100
+      maxIdleConns: 100
+      maxIdleConnsAuto: true
+      connMaxLifetime: 14400
+    isDefault: true
+    editable: false

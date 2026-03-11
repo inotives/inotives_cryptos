@@ -1,0 +1,48 @@
+# Prefect 3 deployment configuration.
+# Register all deployments with: make prefect-deploy
+#
+# The worker container has code at /app — pull step sets working directory
+# so entrypoints resolve correctly inside the container.
+
+name: inotives-pipelines
+prefect-version: "3"
+
+# Pull step: run inside the worker container before each flow run.
+# Code is baked into the image at /app, so we just set the working directory.
+pull:
+  - prefect.deployments.steps.set_working_directory:
+      directory: /app
+
+deployments:
+  # ── 00:00 UTC Monday — Sync CoinGecko asset platforms → coingecko.raw_platforms
+  - name: coingecko-platforms-weekly
+    entrypoint: src/flows/coingecko_platforms.py:coingecko_sync_platforms_flow
+    description: "Sync CoinGecko asset platforms → coingecko.raw_platforms."
+    work_pool:
+      name: data-eng-pool
+    schedules:
+      - cron: "0 0 * * 1"
+        timezone: UTC
+        active: true
+
+  # ── 00:30 UTC Monday — Sync CoinGecko full coin list → coingecko.raw_coins ──
+  - name: coingecko-coins-list-weekly
+    entrypoint: src/flows/coingecko_coins_list.py:coingecko_sync_coins_list_flow
+    description: "Sync full CoinGecko coin list → coingecko.raw_coins."
+    work_pool:
+      name: data-eng-pool
+    schedules:
+      - cron: "30 0 * * 1"
+        timezone: UTC
+        active: true
+
+  # ── 02:00 UTC — Daily OHLCV fetch + indicator computation ──────────────────
+  - name: daily-data-pipeline
+    entrypoint: src/flows/daily_pipeline.py:daily_pipeline_flow
+    description: "CoinGecko OHLCV → asset_metrics_1d, then indicators → asset_indicators_1d."
+    work_pool:
+      name: data-eng-pool
+    schedules:
+      - cron: "0 2 * * *"
+        timezone: UTC
+        active: true

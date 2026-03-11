@@ -27,7 +27,10 @@ services:
     command: prefect server start --host 0.0.0.0
     environment:
       - PREFECT_SERVER_DATABASE_CONNECTION_URL=postgresql+asyncpg://${DB_USER}:${DB_PASSWORD}@db:5432/prefect_internal
+      # The server uses localhost to refer to itself
       - PREFECT_API_URL=http://localhost:4200/api
+      # UI fetches the API from the host browser — use localhost
+      - PREFECT_UI_API_URL=http://localhost:4200/api
     ports:
       - "4200:4200"
     depends_on:
@@ -60,5 +63,30 @@ services:
       prefect:
         condition: service_healthy
 
+  # ── Grafana (BI / Dashboards) ─────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    container_name: inotives_grafana
+    restart: always
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD:-admin}
+      # Pass DB credentials so provisioning YAML can substitute them
+      - DB_HOST=db
+      - DB_PORT=5432
+      - DB_USER=${DB_USER}
+      - DB_PASSWORD=${DB_PASSWORD}
+      - DB_NAME=${DB_NAME}
+    ports:
+      - "3030:3000"
+    volumes:
+      - inotives_grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning
+      - ./grafana/dashboards:/var/lib/grafana/dashboards
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   inotives_postgres_data:
+  inotives_grafana_data:
