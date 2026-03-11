@@ -1,0 +1,7 @@
+source_code,provider_name,category,tier_name,rate_limit_rpm,site_url
+exchange:cryptocom,Crypto.com,MARKET_DATA,free,60,https://crypto.com
+exchange:binance,Binance,MARKET_DATA,free,1200,https://www.binance.com
+exchange:kraken,Kraken,MARKET_DATA,free,60,https://www.kraken.com
+exchange:coinbase,Coinbase Advanced,MARKET_DATA,free,30,https://www.coinbase.com
+api:coingecko,CoinGecko,MARKET_DATA,free,30,https://www.coingecko.com
+api:coinmarketcap,CoinMarketCap,MARKET_DATA,free,30,https://coinmarketcap.com
