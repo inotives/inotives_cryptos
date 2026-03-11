@@ -32,6 +32,12 @@ from common.connections.base import BaseExchangeConnection
 from common.db import get_conn
 
 from .base import BaseStrategy
+from trader_bot.hybrid_coordinator import (
+    REGIME_GRID_PAUSE,
+    get_regime_score_with_circuit_breaker,
+    grid_capital_limit,
+    trend_has_priority,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +209,35 @@ class DcaGridStrategy(BaseStrategy):
         sma_200           = indicators["sma_200"]
         rsi_14            = indicators["rsi_14"]
 
+        # ── 1b. Hybrid regime check ────────────────────────────────────────────
+        # Fetch regime score (0.0 if intraday circuit breaker fires).
+        # When no regime data exists yet (fresh install), fall through to normal
+        # DCA logic — the grid runs unconstrained until regime data is available.
+        regime_score = await get_regime_score_with_circuit_breaker(
+            conn,
+            asset_id       = strategy["base_asset_id"],
+            base_asset_id  = strategy["base_asset_id"],
+            quote_asset_id = strategy["quote_asset_id"],
+        )
+
+        if regime_score is not None:
+            # RS >= 61 → strong trend, grid is paused
+            if regime_score >= REGIME_GRID_PAUSE:
+                logger.info(
+                    "Strategy %d: RS=%.1f >= %.0f — grid paused in trending market.",
+                    strategy_id, regime_score, REGIME_GRID_PAUSE,
+                )
+                return
+
+            # RS > 50 + active trend cycle → trend has execution priority
+            if await trend_has_priority(conn, strategy["base_asset_id"], regime_score):
+                logger.info(
+                    "Strategy %d: RS=%.1f > 50 and TREND_FOLLOW cycle is open "
+                    "— deferring grid entry.",
+                    strategy_id, regime_score,
+                )
+                return
+
         # ── 2. Load current price ──────────────────────────────────────────────
         price_row = await conn.fetchrow(
             """
@@ -263,6 +298,15 @@ class DcaGridStrategy(BaseStrategy):
         # ── 4. Capital check ───────────────────────────────────────────────────
         capital_per_cycle = Decimal(str(active_meta.get("capital_per_cycle", 1000)))
         reserve_pct       = Decimal(str(active_meta.get("reserve_capital_pct", 30))) / 100
+
+        # Regime-scale the capital: lower RS → grid keeps more of its allocation.
+        # Applied only at cycle-open time; existing cycles are never resized.
+        if regime_score is not None:
+            capital_per_cycle = grid_capital_limit(capital_per_cycle, regime_score)
+            logger.debug(
+                "Strategy %d: regime-scaled grid capital: %.2f (RS=%.1f)",
+                strategy_id, capital_per_cycle, regime_score,
+            )
 
         available = await self._available_capital(exchange, conn, strategy)
         if available is None:

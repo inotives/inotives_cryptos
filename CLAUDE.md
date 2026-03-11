@@ -10,9 +10,9 @@ An **automated crypto trading system** — from raw data ingestion to live strat
 
 The goal is a self-contained, fully automated pipeline that:
 1. **Ingests** daily OHLCV market data (CoinGecko, CoinMarketCap) on a schedule
-2. **Computes** technical indicators (ATR, RSI, MACD, Bollinger Bands, SMA/EMA) from raw data
+2. **Computes** technical indicators (ATR, RSI, MACD, Bollinger Bands, SMA/EMA, EMA50/200, ADX, regime scores) from raw data
 3. **Monitors** live prices via exchange APIs (Crypto.com, Binance via `ccxt`)
-4. **Executes** a **volatility-adaptive DCA grid strategy** — an evolution of standard DCA grid that uses ATR to dynamically size grid intervals, weights capital allocation across levels, and has market-regime-aware entry/exit signals
+4. **Executes** a **Hybrid Grid + Regime-Switching strategy** — DCA Grid for sideways markets, Trend Following for uptrends, with a regime score (0–100) dynamically allocating capital between them
 5. **Visualises** all data via Grafana dashboards (prices, indicators, trading performance, backtest results)
 
 The system is personal/research-scale. No SaaS, no multi-user. Single PostgreSQL instance, Docker Compose, Python asyncio bots, Prefect 3 pipelines.
@@ -25,7 +25,7 @@ The system is personal/research-scale. No SaaS, no multi-user. Single PostgreSQL
 
 | Area | Status | Notes |
 |---|---|---|
-| Database schema (25 migrations) | ✅ Done | base + coingecko schemas, all tables, triggers live |
+| Database schema (27 migrations) | ✅ Done | base + coingecko schemas, all tables, triggers live |
 | CoinGecko raw schema | ✅ Done | coingecko.raw_coins + coingecko.raw_platforms, weekly sync |
 | Asset allow-list model | ✅ Done | base.assets + base.networks are curated; CG universe in coingecko.* |
 | Bootstrap setup | ✅ Done | `make bootstrap` seeds + syncs CG + allow-lists ETH/BTC/SOL |
@@ -35,11 +35,15 @@ The system is personal/research-scale. No SaaS, no multi-user. Single PostgreSQL
 | Live fee sync | ✅ Done | fetch_trading_fees() at bot startup, updates DB if changed |
 | Pricing bot | ✅ Done | Parameterised CLI, polls tickers → price_observations (TimescaleDB hypertable, 90d retention) |
 | CoinGecko OHLCV pipeline | ✅ Done | OHLC from /ohlc + volume/market_cap from /market_chart |
-| Daily pipeline | ✅ Done | OHLCV → indicators, sequenced in one Prefect flow |
-| Technical indicators | ✅ Done | ATR, SMA, EMA, MACD, RSI, Bollinger Bands, Volume |
+| Daily pipeline | ✅ Done | OHLCV → indicators → regime scores, sequenced in one Prefect flow |
+| Technical indicators | ✅ Done | ATR, SMA, EMA(12/26/50/200), MACD, RSI, BB, Volume, ADX, EMA slope 5d, vol ratio |
+| Regime indicators | ✅ Done | EMA50/200, ADX(14), EMA slope 5d%, vol ratio in asset_indicators_1d |
+| Market regime scores | ✅ Done | base.asset_market_regime — component + final RS (0–100), all assets backfilled |
 | BTC historical data | ✅ Done | 2010–2026 in asset_metrics_1d + asset_indicators_1d |
-| SOL historical data | ✅ Done | 2020–2026 in asset_metrics_1d + asset_indicators_1d |
-| Trader bot | ✅ Done | Volatility-adaptive DCA grid, defensive mode, intraday RSI, fee-corrected quantities |
+| All 6 assets historical data | ✅ Done | BTC/ETH/SOL/ADA/CRO/XRP indicators + regime scores backfilled |
+| DCA Grid trader bot | ✅ Done | Volatility-adaptive, defensive mode, intraday RSI, fee-corrected quantities |
+| Trend Following strategy | ✅ Done | EMA cross + 5-day high breakout entry, ATR-scaled sizing, rising trailing stop |
+| Hybrid capital coordinator | ✅ Done | Regime-based sliding scale, priority rules, intraday circuit breaker |
 | Backtest engine + runner | ✅ Done | Simulates DCA grid on historical daily candles, saves to DB |
 | Parameter sweep script | ✅ Done | 6 configs × 5 date windows, tabular output |
 | Paper trading setup | ✅ Done | BTC/USDT + SOL/USDT strategies on Crypto.com (Paper) venue |
@@ -52,6 +56,8 @@ The system is personal/research-scale. No SaaS, no multi-user. Single PostgreSQL
 - **Prefect + dbt integration** — run dbt as part of daily pipeline
 - **Portfolio snapshots** — end-of-day automated valuation
 - **CoinMarketCap OHLCV flow** — parallel data source using existing CMC client
+- **Backtest for Trend Following** — extend backtest engine to simulate TREND_FOLLOW strategy
+- **Grafana: regime dashboard** — visualise RS history, component scores, strategy allocation over time
 
 ---
 
@@ -235,7 +241,8 @@ All tables live in the `base` schema. `public` is never used for app tables.
 | `base.data_sources` | External data source registry (CoinGecko, CMC, exchanges). Has `upsert_data_source()` function. |
 | `base.asset_source_mappings` | Maps internal `asset_id` → external identifier per source (e.g. BTC → `"bitcoin"` on CoinGecko). |
 | `base.asset_metrics_1d` | Daily OHLCV + market cap + supply. One row per (asset, date, source). `is_final=true` for completed days. |
-| `base.asset_indicators_1d` | Pre-computed daily indicators. Populated by `compute_indicators_1d.py`. One row per (asset, date). |
+| `base.asset_indicators_1d` | Pre-computed daily indicators. Populated by `compute_indicators_1d.py`. One row per (asset, date). Includes EMA50/200, ADX(14), ema_slope_5d, vol_ratio_14 for regime detection. |
+| `base.asset_market_regime` | Daily regime scores per asset. Computed by `compute_market_regime_1d.py`. Columns: raw_adx/slope/vol_ratio + score_adx/slope/vol (0–100 each) + final_regime_score (weighted). |
 | `base.price_observations` | Live ticker snapshots from pricing bot. TimescaleDB hypertable, 90-day retention. |
 | `base.trade_strategies` | Strategy config (type, parameters, capital allocation, live fees). Parameters stored as JSONB in `metadata`. |
 | `base.trade_cycles` | One active cycle per strategy. Tracks grid state, avg entry, stop loss, unrealised PnL. |
@@ -264,10 +271,15 @@ daily_pipeline_flow(target_date)
   │     ├── fetch_ohlcv_for_asset()        # GET /coins/{id}/ohlc?days=90 per asset
   │     ├── fetch_market_chart_for_asset() # GET /coins/{id}/market_chart?days=91 per asset
   │     └── upsert_ohlcv()                 # → base.asset_metrics_1d (OHLC + volume + market_cap)
-  └── compute_indicators_daily_flow()
-        ├── load_ohlcv()                   # last 400 days from asset_metrics_1d
-        ├── compute_indicators()           # pandas-ta: ATR, SMA, EMA, MACD, RSI, BB, Volume
-        └── upsert_indicators(target_dates=[today])  # → base.asset_indicators_1d
+  ├── compute_indicators_daily_flow()
+  │     ├── load_ohlcv()                   # most recent 400 days from asset_metrics_1d
+  │     ├── compute_indicators()           # pandas-ta: ATR, SMA, EMA(12/26/50/200), MACD, RSI,
+  │     │                                  #            BB, Volume, ADX(14), EMA slope 5d, vol ratio
+  │     └── upsert_indicators(target_dates=[today])  # → base.asset_indicators_1d
+  └── compute_market_regime_daily_flow()
+        ├── load_regime_inputs()           # adx_14, ema_slope_5d, vol_ratio_14 from indicators
+        ├── compute_regime_scores()        # normalise → score_adx/slope/vol → final_regime_score
+        └── upsert_regime_scores()         # → base.asset_market_regime
 ```
 
 ### Registering / updating deployments
@@ -319,6 +331,32 @@ BaseExchangeConnection  (abc, base.py)
 
 ## Trader Bot
 
+### Architecture: Hybrid Grid + Regime-Switching
+
+The trader bot runs two co-operating strategies. A **Regime Score (RS 0–100)** computed
+daily by the pipeline determines how capital is split between them:
+
+| RS Range | Market State | Grid capital | Trend capital |
+|---|---|---|---|
+| 0–30 | Deep Sideways | 100% | 0% |
+| 31–60 | Hybrid/Transition | sliding scale | sliding scale |
+| 61–100 | Strong Trend | 0% | 100% |
+
+Formula: `RS = (score_adx × 0.4) + (score_slope × 0.4) + (score_vol × 0.2)`
+
+**Capital scaling is applied at cycle-open time only** — existing open cycles always
+finish with the capital they started with.
+
+**`trader_bot/hybrid_coordinator.py`** is the shared coordination layer:
+- `get_regime_score_with_circuit_breaker()` — fetches RS; returns 0.0 if intraday price
+  deviation > 2×ATR from daily open (circuit breaker)
+- `grid_capital_limit(capital, rs)` = `capital × (100-rs)/100`
+- `trend_capital_limit(capital, rs)` = `capital × rs/100`
+- `trend_has_priority(conn, asset_id, rs)` — True when RS > 50 and a TREND_FOLLOW cycle is OPEN
+- `grid_has_active_cycle(conn, asset_id)` — True when a DCA_GRID cycle is OPEN
+
+**Strategy registry** (`trader_bot/strategies/__init__.py`): `DCA_GRID` and `TREND_FOLLOW`
+
 ### Strategy: Volatility-Adaptive DCA Grid
 
 Implemented in `apps/bots/trader_bot/strategies/dca_grid.py`. The bot loads all `ACTIVE` strategies from `base.trade_strategies` and runs them concurrently in a 60-second polling loop.
@@ -350,6 +388,58 @@ Crypto.com actual fees: 0.25% maker (`0.0025`) / 0.50% taker (`0.005`).
 - Take profit: `avg_entry_price × (1 + profit_target%)`
 - Stop loss: price < `stop_loss_price` (set at `lowest_filled_level - N × ATR`)
 - Circuit breaker: ATR% > `circuit_breaker_atr_pct`
+
+**Hybrid coordination hooks (added in Phase 4):**
+- Checks `hybrid_coordinator.get_regime_score_with_circuit_breaker()` before opening any cycle
+- RS >= 61 → grid paused; RS > 50 + TREND_FOLLOW cycle open → defers entry
+- `capital_per_cycle` scaled by `(100 - RS) / 100` at cycle-open time
+
+### Strategy: Trend Following (Momentum)
+
+Implemented in `apps/bots/trader_bot/strategies/trend_following.py`. `strategy_type = "TREND_FOLLOW"`.
+
+**Entry conditions (ALL must pass):**
+1. Regime Score >= `min_regime_score` (default 61) from `asset_market_regime`
+2. EMA50 > EMA200 (golden cross — sustained uptrend structure)
+3. Current price > 5-day high (breakout confirmation — momentum trigger)
+4. ADX(14) >= `min_adx` (default 25) — trend has enough strength
+5. RSI(14) < `rsi_entry_max` (default 70) — not overbought at entry
+6. ATR% < `max_atr_pct_entry` (default 6%) — not in extreme volatility
+
+**Position sizing (ATR-scaled):**
+`capital_at_risk = capital_allocated × risk_pct_per_trade`
+`position_size = capital_at_risk / (ATR × atr_stop_multiplier)`
+Capped at `capital_allocated / current_price`. Fee-adjusted via taker fee.
+
+**Cycle state (stored in `trade_cycles.metadata`):**
+`entry_price`, `position_size`, `atr_at_entry`, `initial_stop_loss`,
+`highest_price_since_entry`, `high_5d_at_entry`, `entry_order_id`
+
+**Exit logic (trailing stop):**
+- Initial stop: `entry_price - (atr_stop_multiplier × ATR)` (default 2×)
+- Trailing stop: `highest_price_since_entry - (atr_trail_multiplier × ATR)` (default 3×)
+- Effective stop: `MAX(initial_stop, trailing_stop)` — stop only moves up
+- Trigger: `current_price <= effective_stop`
+
+**Hybrid coordination hooks:**
+- RS <= 50 + active DCA_GRID cycle → defers entry (grid has priority)
+- `capital_allocated` scaled by `RS / 100` at cycle-open time
+- Circuit breaker: if price deviates > 2×ATR from daily open → RS overridden to 0
+
+**Expected strategy metadata:**
+```json
+{
+    "capital_allocated":    1000,
+    "risk_pct_per_trade":   1.0,
+    "atr_stop_multiplier":  2.0,
+    "atr_trail_multiplier": 3.0,
+    "min_adx":              25.0,
+    "min_regime_score":     61.0,
+    "rsi_entry_max":        70.0,
+    "max_atr_pct_entry":    6.0,
+    "reserve_capital_pct":  20
+}
+```
 
 ---
 
