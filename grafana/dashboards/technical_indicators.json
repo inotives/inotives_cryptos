@@ -1,0 +1,203 @@
+{
+  "id": null,
+  "uid": "technical-indicators",
+  "title": "Technical Indicators",
+  "tags": ["indicators", "rsi", "atr"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "5m",
+  "time": { "from": "now-90d", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "asset",
+        "type": "query",
+        "label": "Asset",
+        "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+        "query": "SELECT code FROM base.assets WHERE deleted_at IS NULL AND code IN (SELECT DISTINCT a.code FROM base.asset_indicators_1d i JOIN base.assets a ON a.id = i.asset_id) ORDER BY code",
+        "refresh": 1,
+        "multi": true,
+        "includeAll": true,
+        "current": { "text": "All", "value": "$__all" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "RSI (14)",
+      "description": "Overbought > 70 · Oversold < 30",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "unit": "none",
+          "decimals": 1,
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 30 },
+              { "color": "red", "value": 70 }
+            ]
+          }
+        }
+      },
+      "options": {
+        "tooltip": { "mode": "multi" },
+        "legend": { "displayMode": "list", "placement": "bottom" }
+      },
+      "targets": [
+        {
+          "rawSql": "SELECT metric_date::timestamptz AS time, rsi_14 AS value, a.code AS metric FROM base.asset_indicators_1d i JOIN base.assets a ON a.id = i.asset_id WHERE $__timeFilter(metric_date::timestamptz) AND rsi_14 IS NOT NULL AND a.code IN ($asset) ORDER BY time",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "ATR % (Volatility)",
+      "description": "ATR as % of close price. Regime: low < 2% · normal 2-4% · high 4-6% · extreme > 6%",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10 },
+          "unit": "percent",
+          "decimals": 2
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "rawSql": "SELECT metric_date::timestamptz AS time, atr_pct AS value, a.code AS metric FROM base.asset_indicators_1d i JOIN base.assets a ON a.id = i.asset_id WHERE $__timeFilter(metric_date::timestamptz) AND atr_pct IS NOT NULL AND a.code IN ($asset) ORDER BY time",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "ATR (14) — Absolute",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "rawSql": "SELECT metric_date::timestamptz AS time, atr_14 AS value, a.code AS metric FROM base.asset_indicators_1d i JOIN base.assets a ON a.id = i.asset_id WHERE $__timeFilter(metric_date::timestamptz) AND atr_14 IS NOT NULL AND a.code IN ($asset) ORDER BY time",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "Price vs SMA(50) vs SMA(200)",
+      "description": "Golden cross: SMA50 crosses above SMA200 (bullish). Death cross: SMA50 crosses below SMA200 (bearish).",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 16 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2 },
+          "unit": "currencyUSD",
+          "decimals": 2
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "rawSql": "SELECT m.metric_date::timestamptz AS time, m.close_price AS value, CONCAT(a.code, ' close') AS metric FROM base.asset_metrics_1d m JOIN base.assets a ON a.id = m.asset_id WHERE $__timeFilter(m.metric_date::timestamptz) AND m.is_final = true AND a.code IN ($asset) ORDER BY time",
+          "format": "time_series",
+          "refId": "A"
+        },
+        {
+          "rawSql": "SELECT metric_date::timestamptz AS time, sma_50 AS value, CONCAT(a.code, ' SMA50') AS metric FROM base.asset_indicators_1d i JOIN base.assets a ON a.id = i.asset_id WHERE $__timeFilter(metric_date::timestamptz) AND sma_50 IS NOT NULL AND a.code IN ($asset) ORDER BY time",
+          "format": "time_series",
+          "refId": "B"
+        },
+        {
+          "rawSql": "SELECT metric_date::timestamptz AS time, sma_200 AS value, CONCAT(a.code, ' SMA200') AS metric FROM base.asset_indicators_1d i JOIN base.assets a ON a.id = i.asset_id WHERE $__timeFilter(metric_date::timestamptz) AND sma_200 IS NOT NULL AND a.code IN ($asset) ORDER BY time",
+          "format": "time_series",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "MACD",
+      "description": "MACD line, signal line, histogram",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 25 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": { "custom": { "lineWidth": 1 }, "unit": "currencyUSD", "decimals": 2 }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "rawSql": "SELECT metric_date::timestamptz AS time, macd_line AS value, CONCAT(a.code, ' MACD') AS metric FROM base.asset_indicators_1d i JOIN base.assets a ON a.id = i.asset_id WHERE $__timeFilter(metric_date::timestamptz) AND macd_line IS NOT NULL AND a.code IN ($asset) ORDER BY time",
+          "format": "time_series",
+          "refId": "A"
+        },
+        {
+          "rawSql": "SELECT metric_date::timestamptz AS time, macd_signal AS value, CONCAT(a.code, ' Signal') AS metric FROM base.asset_indicators_1d i JOIN base.assets a ON a.id = i.asset_id WHERE $__timeFilter(metric_date::timestamptz) AND macd_signal IS NOT NULL AND a.code IN ($asset) ORDER BY time",
+          "format": "time_series",
+          "refId": "B"
+        },
+        {
+          "rawSql": "SELECT metric_date::timestamptz AS time, macd_histogram AS value, CONCAT(a.code, ' Histogram') AS metric FROM base.asset_indicators_1d i JOIN base.assets a ON a.id = i.asset_id WHERE $__timeFilter(metric_date::timestamptz) AND macd_histogram IS NOT NULL AND a.code IN ($asset) ORDER BY time",
+          "format": "time_series",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Latest Indicator Snapshot",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 33 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": { "decimals": 2 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "rsi_14" }, "properties": [
+            { "id": "displayName", "value": "RSI(14)" },
+            { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 30 }, { "color": "red", "value": 70 }] } },
+            { "id": "custom.displayMode", "value": "color-background" }
+          ]},
+          { "matcher": { "id": "byName", "options": "volatility_regime" }, "properties": [
+            { "id": "displayName", "value": "regime" },
+            { "id": "mappings", "value": [
+              { "type": "value", "options": { "low": { "color": "green", "index": 0 }, "normal": { "color": "blue", "index": 1 }, "high": { "color": "orange", "index": 2 }, "extreme": { "color": "red", "index": 3 } } }
+            ]},
+            { "id": "custom.displayMode", "value": "color-background" }
+          ]}
+        ]
+      },
+      "options": { "footer": { "show": false } },
+      "targets": [
+        {
+          "rawSql": "SELECT a.code AS asset, i.metric_date, ROUND(i.rsi_14::numeric,1) AS rsi_14, ROUND(i.atr_pct::numeric,2) AS atr_pct, i.volatility_regime, ROUND(i.sma_50::numeric,2) AS sma_50, ROUND(i.sma_200::numeric,2) AS sma_200, ROUND(i.macd_line::numeric,4) AS macd_line FROM base.asset_indicators_1d i JOIN base.assets a ON a.id = i.asset_id WHERE i.metric_date = (SELECT MAX(metric_date) FROM base.asset_indicators_1d WHERE rsi_14 IS NOT NULL) AND a.code IN ($asset) ORDER BY a.code",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

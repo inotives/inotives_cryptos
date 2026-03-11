@@ -1,0 +1,234 @@
+{
+  "id": null,
+  "uid": "trading-performance",
+  "title": "Trading Performance",
+  "tags": ["trading", "backtest", "grid"],
+  "timezone": "browser",
+  "schemaVersion": 38,
+  "version": 1,
+  "refresh": "1m",
+  "time": { "from": "now-30d", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Active Strategies",
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "auto" },
+      "targets": [
+        {
+          "rawSql": "SELECT NOW() AS time, COUNT(*) AS value FROM base.trade_strategies WHERE status = 'ACTIVE' AND deleted_at IS NULL",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Open Cycles",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "auto" },
+      "targets": [
+        {
+          "rawSql": "SELECT NOW() AS time, COUNT(*) AS value FROM base.trade_cycles WHERE status = 'OPEN'",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Total Backtest Runs",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "auto" },
+      "targets": [
+        {
+          "rawSql": "SELECT NOW() AS time, COUNT(*) AS value FROM base.backtest_runs WHERE status = 'COMPLETED'",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Price Observations (24h)",
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+        }
+      },
+      "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none", "textMode": "auto" },
+      "targets": [
+        {
+          "rawSql": "SELECT NOW() AS time, COUNT(*) AS value FROM base.price_observations WHERE observed_at >= NOW() - INTERVAL '24 hours'",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "table",
+      "title": "Active Strategies",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "status" }, "properties": [
+            { "id": "mappings", "value": [
+              { "type": "value", "options": { "ACTIVE": { "color": "green", "index": 0 }, "PAUSED": { "color": "orange", "index": 1 }, "INACTIVE": { "color": "red", "index": 2 } } }
+            ]},
+            { "id": "custom.displayMode", "value": "color-background" }
+          ]}
+        ]
+      },
+      "options": { "footer": { "show": false } },
+      "targets": [
+        {
+          "rawSql": "SELECT ts.id, ts.name, ts.strategy_type, b.code AS base_asset, q.code AS quote_asset, ts.status, ts.created_at::date AS created FROM base.trade_strategies ts JOIN base.assets b ON b.id = ts.base_asset_id JOIN base.assets q ON q.id = ts.quote_asset_id WHERE ts.deleted_at IS NULL ORDER BY ts.status, ts.created_at DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "table",
+      "title": "Open Trade Cycles",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 12 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": { "decimals": 2 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "unrealised_pnl" }, "properties": [
+            { "id": "unit", "value": "currencyUSD" },
+            { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 0 }] } },
+            { "id": "custom.displayMode", "value": "color-text" }
+          ]},
+          { "matcher": { "id": "byName", "options": "avg_entry" }, "properties": [{ "id": "unit", "value": "currencyUSD" }] },
+          { "matcher": { "id": "byName", "options": "stop_loss" }, "properties": [{ "id": "unit", "value": "currencyUSD" }] }
+        ]
+      },
+      "options": { "footer": { "show": false } },
+      "targets": [
+        {
+          "rawSql": "SELECT tc.id, ts.name AS strategy, tc.status, ROUND(tc.avg_entry_price::numeric,4) AS avg_entry, ROUND(tc.stop_loss_price::numeric,4) AS stop_loss, ROUND(tc.unrealised_pnl::numeric,2) AS unrealised_pnl, tc.created_at FROM base.trade_cycles tc JOIN base.trade_strategies ts ON ts.id = tc.strategy_id WHERE tc.status = 'OPEN' ORDER BY tc.created_at DESC",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "table",
+      "title": "Grid Levels (Open Cycles)",
+      "gridPos": { "h": 9, "w": 24, "x": 0, "y": 20 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": { "decimals": 4 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "target_price" }, "properties": [{ "id": "unit", "value": "currencyUSD" }] },
+          { "matcher": { "id": "byName", "options": "fill_price" }, "properties": [{ "id": "unit", "value": "currencyUSD" }] },
+          { "matcher": { "id": "byName", "options": "status" }, "properties": [
+            { "id": "mappings", "value": [
+              { "type": "value", "options": { "OPEN": { "color": "blue", "index": 0 }, "FILLED": { "color": "green", "index": 1 }, "CANCELLED": { "color": "red", "index": 2 } } }
+            ]},
+            { "id": "custom.displayMode", "value": "color-background" }
+          ]}
+        ]
+      },
+      "options": { "footer": { "show": false } },
+      "targets": [
+        {
+          "rawSql": "SELECT gl.cycle_id, ts.name AS strategy, gl.level_index, ROUND(gl.target_price::numeric,4) AS target_price, ROUND(gl.fill_price::numeric,4) AS fill_price, gl.quantity, gl.weight, gl.status, gl.filled_at FROM base.trade_grid_levels gl JOIN base.trade_cycles tc ON tc.id = gl.cycle_id JOIN base.trade_strategies ts ON ts.id = tc.strategy_id WHERE tc.status = 'OPEN' ORDER BY gl.cycle_id, gl.level_index",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "table",
+      "title": "Backtest Results",
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 29 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": { "decimals": 2 },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "return_pct" }, "properties": [
+            { "id": "displayName", "value": "return %" },
+            { "id": "unit", "value": "percent" },
+            { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 0 }] } },
+            { "id": "custom.displayMode", "value": "color-text" }
+          ]},
+          { "matcher": { "id": "byName", "options": "max_dd_pct" }, "properties": [
+            { "id": "displayName", "value": "max DD %" },
+            { "id": "unit", "value": "percent" },
+            { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 10 }, { "color": "red", "value": 25 }] } },
+            { "id": "custom.displayMode", "value": "color-text" }
+          ]},
+          { "matcher": { "id": "byName", "options": "win_pct" }, "properties": [{ "id": "displayName", "value": "win %" }, { "id": "unit", "value": "percent" }] },
+          { "matcher": { "id": "byName", "options": "sharpe" }, "properties": [{ "id": "decimals", "value": 3 }] }
+        ]
+      },
+      "options": { "footer": { "show": false }, "sortBy": [{ "displayName": "completed", "desc": true }] },
+      "targets": [
+        {
+          "rawSql": "SELECT br.name, a.code AS asset, br.start_date, br.end_date, ROUND(br.total_return_pct::numeric,2) AS return_pct, ROUND(br.max_drawdown_pct::numeric,2) AS max_dd_pct, ROUND(br.win_rate::numeric,1) AS win_pct, ROUND(br.sharpe_ratio::numeric,3) AS sharpe, ROUND(br.profit_factor::numeric,2) AS profit_factor, br.total_cycles, ROUND((br.avg_cycle_duration_secs / 86400)::numeric,1) AS avg_dur_days, br.completed_at::date AS completed FROM base.backtest_runs br JOIN base.assets a ON a.id = br.asset_id WHERE br.status = 'COMPLETED' ORDER BY br.completed_at DESC LIMIT 100",
+          "format": "table",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "Backtest Return % by Run",
+      "gridPos": { "h": 8, "w": 24, "x": 0, "y": 39 },
+      "datasource": { "type": "postgres", "uid": "inotives_timescaledb" },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 0, "fillOpacity": 60, "pointSize": 8, "drawStyle": "points" },
+          "unit": "percent",
+          "decimals": 2
+        }
+      },
+      "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+      "targets": [
+        {
+          "rawSql": "SELECT completed_at AS time, total_return_pct AS value, name AS metric FROM base.backtest_runs WHERE status = 'COMPLETED' AND $__timeFilter(completed_at) ORDER BY completed_at",
+          "format": "time_series",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}
