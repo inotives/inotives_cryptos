@@ -3,31 +3,31 @@
 -- ENUMs
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'trade_strategy_status') THEN
-        CREATE TYPE base.trade_strategy_status AS ENUM ('ACTIVE', 'PAUSED', 'ARCHIVED');
+        CREATE TYPE inotives_tradings.trade_strategy_status AS ENUM ('ACTIVE', 'PAUSED', 'ARCHIVED');
     END IF;
 END $$;
 
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'trade_cycle_status') THEN
-        CREATE TYPE base.trade_cycle_status AS ENUM ('OPEN', 'CLOSING', 'CLOSED', 'CANCELLED');
+        CREATE TYPE inotives_tradings.trade_cycle_status AS ENUM ('OPEN', 'CLOSING', 'CLOSED', 'CANCELLED');
     END IF;
 END $$;
 
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'trade_side') THEN
-        CREATE TYPE base.trade_side AS ENUM ('BUY', 'SELL');
+        CREATE TYPE inotives_tradings.trade_side AS ENUM ('BUY', 'SELL');
     END IF;
 END $$;
 
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'trade_order_type') THEN
-        CREATE TYPE base.trade_order_type AS ENUM ('LIMIT', 'MARKET', 'STOP_LIMIT', 'STOP_MARKET');
+        CREATE TYPE inotives_tradings.trade_order_type AS ENUM ('LIMIT', 'MARKET', 'STOP_LIMIT', 'STOP_MARKET');
     END IF;
 END $$;
 
 DO $$ BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'trade_order_status') THEN
-        CREATE TYPE base.trade_order_status AS ENUM ('PENDING', 'OPEN', 'PARTIALLY_FILLED', 'FILLED', 'CANCELLED', 'REJECTED', 'EXPIRED');
+        CREATE TYPE inotives_tradings.trade_order_status AS ENUM ('PENDING', 'OPEN', 'PARTIALLY_FILLED', 'FILLED', 'CANCELLED', 'REJECTED', 'EXPIRED');
     END IF;
 END $$;
 
@@ -44,7 +44,7 @@ END $$;
 --   MOMENTUM:  { "lookback_period": 14, "entry_threshold": 0.03 }
 --   ARBITRAGE: { "min_spread_pct": 0.5, "max_position_usd": 5000 }
 -- -----------------------------------------------------------------------------
-CREATE TABLE base.trade_strategies (
+CREATE TABLE inotives_tradings.trade_strategies (
     id             BIGSERIAL PRIMARY KEY,
     name           TEXT NOT NULL,
     description    TEXT,
@@ -52,9 +52,9 @@ CREATE TABLE base.trade_strategies (
 
     -- The pair being traded and the specific account to execute on
     -- Exchange is derivable via venue_id → venues.source_id
-    base_asset_id  BIGINT NOT NULL REFERENCES base.assets(id)  DEFERRABLE INITIALLY DEFERRED,
-    quote_asset_id BIGINT NOT NULL REFERENCES base.assets(id)  DEFERRABLE INITIALLY DEFERRED,
-    venue_id       BIGINT NOT NULL REFERENCES base.venues(id)  DEFERRABLE INITIALLY DEFERRED,
+    base_asset_id  BIGINT NOT NULL REFERENCES inotives_tradings.assets(id)  DEFERRABLE INITIALLY DEFERRED,
+    quote_asset_id BIGINT NOT NULL REFERENCES inotives_tradings.assets(id)  DEFERRABLE INITIALLY DEFERRED,
+    venue_id       BIGINT NOT NULL REFERENCES inotives_tradings.venues(id)  DEFERRABLE INITIALLY DEFERRED,
 
     -- Exchange fee rates for this strategy (affects net profit threshold calculation)
     -- Limit orders (DCA buys) use maker_fee_pct; exit sells may use taker_fee_pct.
@@ -62,7 +62,7 @@ CREATE TABLE base.trade_strategies (
     maker_fee_pct NUMERIC(8, 6) NOT NULL DEFAULT 0,  -- e.g. 0.001000 = 0.1%
     taker_fee_pct NUMERIC(8, 6) NOT NULL DEFAULT 0,  -- e.g. 0.001000 = 0.1%
 
-    status   base.trade_strategy_status NOT NULL DEFAULT 'ACTIVE',
+    status   inotives_tradings.trade_strategy_status NOT NULL DEFAULT 'ACTIVE',
     metadata JSONB NOT NULL DEFAULT '{}',  -- Strategy-type-specific parameters
 
     -- Audit fields
@@ -71,46 +71,46 @@ CREATE TABLE base.trade_strategies (
 
     -- Soft Delete fields
     deleted_at TIMESTAMPTZ,
-    deleted_by BIGINT REFERENCES base.users(id) DEFERRABLE INITIALLY DEFERRED,
+    deleted_by BIGINT REFERENCES inotives_tradings.users(id) DEFERRABLE INITIALLY DEFERRED,
 
     -- Temporal / versioning fields
     version    INTEGER   NOT NULL DEFAULT 1,
     sys_period TSTZRANGE NOT NULL DEFAULT TSTZRANGE(current_timestamp, null),
 
     -- Ownership references
-    created_by BIGINT REFERENCES base.users(id) DEFERRABLE INITIALLY DEFERRED,
-    updated_by BIGINT REFERENCES base.users(id) DEFERRABLE INITIALLY DEFERRED,
+    created_by BIGINT REFERENCES inotives_tradings.users(id) DEFERRABLE INITIALLY DEFERRED,
+    updated_by BIGINT REFERENCES inotives_tradings.users(id) DEFERRABLE INITIALLY DEFERRED,
 
     CONSTRAINT chk_deleted_fields_trade_strategies CHECK (
         (deleted_at IS NULL AND deleted_by IS NULL) OR (deleted_at IS NOT NULL AND deleted_by IS NOT NULL)
     )
 );
 
-CREATE INDEX ON base.trade_strategies (strategy_type, status);
-CREATE INDEX ON base.trade_strategies (venue_id);
-CREATE INDEX ON base.trade_strategies (base_asset_id, quote_asset_id);
+CREATE INDEX ON inotives_tradings.trade_strategies (strategy_type, status);
+CREATE INDEX ON inotives_tradings.trade_strategies (venue_id);
+CREATE INDEX ON inotives_tradings.trade_strategies (base_asset_id, quote_asset_id);
 
-CREATE TABLE base.trade_strategies_history (LIKE base.trade_strategies INCLUDING DEFAULTS);
-ALTER TABLE base.trade_strategies_history
+CREATE TABLE inotives_tradings.trade_strategies_history (LIKE inotives_tradings.trade_strategies INCLUDING DEFAULTS);
+ALTER TABLE inotives_tradings.trade_strategies_history
     ADD COLUMN changed_at  TIMESTAMPTZ,
     ADD COLUMN changed_by  BIGINT,
     ADD COLUMN change_type TEXT,
     ADD COLUMN changes     JSONB;
-CREATE INDEX ON base.trade_strategies_history (sys_period);
-CREATE INDEX ON base.trade_strategies_history (changed_at);
-CREATE INDEX ON base.trade_strategies_history (changed_by);
+CREATE INDEX ON inotives_tradings.trade_strategies_history (sys_period);
+CREATE INDEX ON inotives_tradings.trade_strategies_history (changed_at);
+CREATE INDEX ON inotives_tradings.trade_strategies_history (changed_by);
 
 CREATE TRIGGER auditing_trigger_trade_strategies
-    BEFORE INSERT OR UPDATE ON base.trade_strategies
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.trade_strategies
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 CREATE TRIGGER soft_delete_trigger_trade_strategies
-    BEFORE DELETE ON base.trade_strategies
-    FOR EACH ROW EXECUTE PROCEDURE base.trigger_soft_delete();
+    BEFORE DELETE ON inotives_tradings.trade_strategies
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.trigger_soft_delete();
 
 CREATE TRIGGER versioning_trigger_trade_strategies
-    BEFORE UPDATE OR DELETE ON base.trade_strategies
-    FOR EACH ROW EXECUTE PROCEDURE base.versioning('base.trade_strategies_history');
+    BEFORE UPDATE OR DELETE ON inotives_tradings.trade_strategies
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.versioning('inotives_tradings.trade_strategies_history');
 
 
 -- -----------------------------------------------------------------------------
@@ -125,15 +125,15 @@ CREATE TRIGGER versioning_trigger_trade_strategies
 --                "total_cost": 500.00 }
 --   MOMENTUM:  { "entry_signal": "RSI_OVERSOLD", "entry_price": 48000 }
 -- -----------------------------------------------------------------------------
-CREATE TABLE base.trade_cycles (
+CREATE TABLE inotives_tradings.trade_cycles (
     id           BIGSERIAL PRIMARY KEY,
-    strategy_id  BIGINT  NOT NULL REFERENCES base.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,
+    strategy_id  BIGINT  NOT NULL REFERENCES inotives_tradings.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,
     cycle_number INTEGER NOT NULL,  -- Incrementing counter per strategy (1, 2, 3 ...)
 
     capital_allocated NUMERIC(36, 8) NOT NULL,  -- Quote currency deployed for this cycle
 
     -- Lifecycle
-    status        base.trade_cycle_status NOT NULL DEFAULT 'OPEN',
+    status        inotives_tradings.trade_cycle_status NOT NULL DEFAULT 'OPEN',
     close_trigger TEXT,                   -- 'take_profit' | 'stop_loss' | 'manual'
     opened_at     TIMESTAMPTZ NOT NULL DEFAULT current_timestamp,
     closed_at     TIMESTAMPTZ,
@@ -146,15 +146,15 @@ CREATE TABLE base.trade_cycles (
 
     -- Soft Delete fields
     deleted_at TIMESTAMPTZ,
-    deleted_by BIGINT REFERENCES base.users(id) DEFERRABLE INITIALLY DEFERRED,
+    deleted_by BIGINT REFERENCES inotives_tradings.users(id) DEFERRABLE INITIALLY DEFERRED,
 
     -- Temporal / versioning fields
     version    INTEGER   NOT NULL DEFAULT 1,
     sys_period TSTZRANGE NOT NULL DEFAULT TSTZRANGE(current_timestamp, null),
 
     -- Ownership references
-    created_by BIGINT REFERENCES base.users(id) DEFERRABLE INITIALLY DEFERRED,
-    updated_by BIGINT REFERENCES base.users(id) DEFERRABLE INITIALLY DEFERRED,
+    created_by BIGINT REFERENCES inotives_tradings.users(id) DEFERRABLE INITIALLY DEFERRED,
+    updated_by BIGINT REFERENCES inotives_tradings.users(id) DEFERRABLE INITIALLY DEFERRED,
 
     CONSTRAINT uq_trade_cycles UNIQUE (strategy_id, cycle_number),
     CONSTRAINT chk_deleted_fields_trade_cycles CHECK (
@@ -162,29 +162,29 @@ CREATE TABLE base.trade_cycles (
     )
 );
 
-CREATE INDEX ON base.trade_cycles (strategy_id, status);
+CREATE INDEX ON inotives_tradings.trade_cycles (strategy_id, status);
 
-CREATE TABLE base.trade_cycles_history (LIKE base.trade_cycles INCLUDING DEFAULTS);
-ALTER TABLE base.trade_cycles_history
+CREATE TABLE inotives_tradings.trade_cycles_history (LIKE inotives_tradings.trade_cycles INCLUDING DEFAULTS);
+ALTER TABLE inotives_tradings.trade_cycles_history
     ADD COLUMN changed_at  TIMESTAMPTZ,
     ADD COLUMN changed_by  BIGINT,
     ADD COLUMN change_type TEXT,
     ADD COLUMN changes     JSONB;
-CREATE INDEX ON base.trade_cycles_history (sys_period);
-CREATE INDEX ON base.trade_cycles_history (changed_at);
-CREATE INDEX ON base.trade_cycles_history (changed_by);
+CREATE INDEX ON inotives_tradings.trade_cycles_history (sys_period);
+CREATE INDEX ON inotives_tradings.trade_cycles_history (changed_at);
+CREATE INDEX ON inotives_tradings.trade_cycles_history (changed_by);
 
 CREATE TRIGGER auditing_trigger_trade_cycles
-    BEFORE INSERT OR UPDATE ON base.trade_cycles
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.trade_cycles
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 CREATE TRIGGER soft_delete_trigger_trade_cycles
-    BEFORE DELETE ON base.trade_cycles
-    FOR EACH ROW EXECUTE PROCEDURE base.trigger_soft_delete();
+    BEFORE DELETE ON inotives_tradings.trade_cycles
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.trigger_soft_delete();
 
 CREATE TRIGGER versioning_trigger_trade_cycles
-    BEFORE UPDATE OR DELETE ON base.trade_cycles
-    FOR EACH ROW EXECUTE PROCEDURE base.versioning('base.trade_cycles_history');
+    BEFORE UPDATE OR DELETE ON inotives_tradings.trade_cycles
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.versioning('inotives_tradings.trade_cycles_history');
 
 
 -- -----------------------------------------------------------------------------
@@ -197,15 +197,15 @@ CREATE TRIGGER versioning_trigger_trade_cycles
 --   DCA_GRID buy:  { "slot_number": 3 }
 --   DCA_GRID sell: { "trigger": "take_profit", "avg_buy_price": 49200 }
 -- -----------------------------------------------------------------------------
-CREATE TABLE base.trade_orders (
+CREATE TABLE inotives_tradings.trade_orders (
     id          BIGSERIAL PRIMARY KEY,
-    cycle_id    BIGINT NOT NULL REFERENCES base.trade_cycles(id)     DEFERRABLE INITIALLY DEFERRED,
-    strategy_id BIGINT NOT NULL REFERENCES base.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,
+    cycle_id    BIGINT NOT NULL REFERENCES inotives_tradings.trade_cycles(id)     DEFERRABLE INITIALLY DEFERRED,
+    strategy_id BIGINT NOT NULL REFERENCES inotives_tradings.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,
 
     exchange_order_id TEXT,  -- Order ID returned by the exchange
 
-    side       base.trade_side         NOT NULL,
-    order_type base.trade_order_type   NOT NULL DEFAULT 'LIMIT',
+    side       inotives_tradings.trade_side         NOT NULL,
+    order_type inotives_tradings.trade_order_type   NOT NULL DEFAULT 'LIMIT',
 
     -- Order intent
     target_price NUMERIC(36, 18) NOT NULL,
@@ -217,7 +217,7 @@ CREATE TABLE base.trade_orders (
     fee_total       NUMERIC(36, 8)  NOT NULL DEFAULT 0,
     fee_asset       TEXT,
 
-    status       base.trade_order_status NOT NULL DEFAULT 'PENDING',
+    status       inotives_tradings.trade_order_status NOT NULL DEFAULT 'PENDING',
     submitted_at TIMESTAMPTZ,
 
     metadata JSONB NOT NULL DEFAULT '{}',  -- Strategy-specific order context
@@ -228,15 +228,15 @@ CREATE TABLE base.trade_orders (
 
     -- Soft Delete fields
     deleted_at TIMESTAMPTZ,
-    deleted_by BIGINT REFERENCES base.users(id) DEFERRABLE INITIALLY DEFERRED,
+    deleted_by BIGINT REFERENCES inotives_tradings.users(id) DEFERRABLE INITIALLY DEFERRED,
 
     -- Temporal / versioning fields
     version    INTEGER   NOT NULL DEFAULT 1,
     sys_period TSTZRANGE NOT NULL DEFAULT TSTZRANGE(current_timestamp, null),
 
     -- Ownership references
-    created_by BIGINT REFERENCES base.users(id) DEFERRABLE INITIALLY DEFERRED,
-    updated_by BIGINT REFERENCES base.users(id) DEFERRABLE INITIALLY DEFERRED,
+    created_by BIGINT REFERENCES inotives_tradings.users(id) DEFERRABLE INITIALLY DEFERRED,
+    updated_by BIGINT REFERENCES inotives_tradings.users(id) DEFERRABLE INITIALLY DEFERRED,
 
     CONSTRAINT uq_trade_orders_exchange_id UNIQUE (cycle_id, exchange_order_id),
     CONSTRAINT chk_deleted_fields_trade_orders CHECK (
@@ -244,30 +244,30 @@ CREATE TABLE base.trade_orders (
     )
 );
 
-CREATE INDEX ON base.trade_orders (cycle_id, status);
-CREATE INDEX ON base.trade_orders (cycle_id, side);
+CREATE INDEX ON inotives_tradings.trade_orders (cycle_id, status);
+CREATE INDEX ON inotives_tradings.trade_orders (cycle_id, side);
 
-CREATE TABLE base.trade_orders_history (LIKE base.trade_orders INCLUDING DEFAULTS);
-ALTER TABLE base.trade_orders_history
+CREATE TABLE inotives_tradings.trade_orders_history (LIKE inotives_tradings.trade_orders INCLUDING DEFAULTS);
+ALTER TABLE inotives_tradings.trade_orders_history
     ADD COLUMN changed_at  TIMESTAMPTZ,
     ADD COLUMN changed_by  BIGINT,
     ADD COLUMN change_type TEXT,
     ADD COLUMN changes     JSONB;
-CREATE INDEX ON base.trade_orders_history (sys_period);
-CREATE INDEX ON base.trade_orders_history (changed_at);
-CREATE INDEX ON base.trade_orders_history (changed_by);
+CREATE INDEX ON inotives_tradings.trade_orders_history (sys_period);
+CREATE INDEX ON inotives_tradings.trade_orders_history (changed_at);
+CREATE INDEX ON inotives_tradings.trade_orders_history (changed_by);
 
 CREATE TRIGGER auditing_trigger_trade_orders
-    BEFORE INSERT OR UPDATE ON base.trade_orders
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.trade_orders
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 CREATE TRIGGER soft_delete_trigger_trade_orders
-    BEFORE DELETE ON base.trade_orders
-    FOR EACH ROW EXECUTE PROCEDURE base.trigger_soft_delete();
+    BEFORE DELETE ON inotives_tradings.trade_orders
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.trigger_soft_delete();
 
 CREATE TRIGGER versioning_trigger_trade_orders
-    BEFORE UPDATE OR DELETE ON base.trade_orders
-    FOR EACH ROW EXECUTE PROCEDURE base.versioning('base.trade_orders_history');
+    BEFORE UPDATE OR DELETE ON inotives_tradings.trade_orders
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.versioning('inotives_tradings.trade_orders_history');
 
 
 -- -----------------------------------------------------------------------------
@@ -275,14 +275,14 @@ CREATE TRIGGER versioning_trigger_trade_orders
 -- Immutable fill records received from the exchange.
 -- One order can produce multiple partial fills.
 -- -----------------------------------------------------------------------------
-CREATE TABLE base.trade_executions (
+CREATE TABLE inotives_tradings.trade_executions (
     id       BIGSERIAL PRIMARY KEY,
-    order_id BIGINT NOT NULL REFERENCES base.trade_orders(id) DEFERRABLE INITIALLY DEFERRED,
-    cycle_id BIGINT NOT NULL REFERENCES base.trade_cycles(id) DEFERRABLE INITIALLY DEFERRED,
+    order_id BIGINT NOT NULL REFERENCES inotives_tradings.trade_orders(id) DEFERRABLE INITIALLY DEFERRED,
+    cycle_id BIGINT NOT NULL REFERENCES inotives_tradings.trade_cycles(id) DEFERRABLE INITIALLY DEFERRED,
 
     exchange_execution_id TEXT NOT NULL,  -- Fill ID from the exchange
 
-    side              base.trade_side NOT NULL,
+    side              inotives_tradings.trade_side NOT NULL,
     executed_price    NUMERIC(36, 18) NOT NULL,
     executed_quantity NUMERIC(36, 18) NOT NULL,
     quote_quantity    NUMERIC(36, 8)  NOT NULL,  -- executed_price * executed_quantity
@@ -299,12 +299,12 @@ CREATE TABLE base.trade_executions (
     CONSTRAINT uq_trade_executions UNIQUE (order_id, exchange_execution_id)
 );
 
-CREATE INDEX ON base.trade_executions (cycle_id, side);
-CREATE INDEX ON base.trade_executions (executed_at);
+CREATE INDEX ON inotives_tradings.trade_executions (cycle_id, side);
+CREATE INDEX ON inotives_tradings.trade_executions (executed_at);
 
 CREATE TRIGGER auditing_trigger_trade_executions
-    BEFORE INSERT OR UPDATE ON base.trade_executions
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.trade_executions
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 
 -- -----------------------------------------------------------------------------
@@ -312,10 +312,10 @@ CREATE TRIGGER auditing_trigger_trade_executions
 -- One record written when a cycle closes. Core P&L maths are columns;
 -- strategy-specific breakdown (e.g. per-slot detail) goes in metadata.
 -- -----------------------------------------------------------------------------
-CREATE TABLE base.trade_pnl (
+CREATE TABLE inotives_tradings.trade_pnl (
     id          BIGSERIAL PRIMARY KEY,
-    cycle_id    BIGINT NOT NULL UNIQUE REFERENCES base.trade_cycles(id)     DEFERRABLE INITIALLY DEFERRED,
-    strategy_id BIGINT NOT NULL        REFERENCES base.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,
+    cycle_id    BIGINT NOT NULL UNIQUE REFERENCES inotives_tradings.trade_cycles(id)     DEFERRABLE INITIALLY DEFERRED,
+    strategy_id BIGINT NOT NULL        REFERENCES inotives_tradings.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,
 
     -- Buy side summary
     total_buy_quantity NUMERIC(36, 18) NOT NULL,
@@ -342,24 +342,24 @@ CREATE TABLE base.trade_pnl (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT current_timestamp
 );
 
-CREATE INDEX ON base.trade_pnl (strategy_id, closed_at DESC);
+CREATE INDEX ON inotives_tradings.trade_pnl (strategy_id, closed_at DESC);
 
 CREATE TRIGGER auditing_trigger_trade_pnl
-    BEFORE INSERT OR UPDATE ON base.trade_pnl
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.trade_pnl
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 
 -- migrate:down
-DROP TABLE IF EXISTS base.trade_pnl CASCADE;
-DROP TABLE IF EXISTS base.trade_executions CASCADE;
-DROP TABLE IF EXISTS base.trade_orders_history;
-DROP TABLE IF EXISTS base.trade_orders CASCADE;
-DROP TABLE IF EXISTS base.trade_cycles_history;
-DROP TABLE IF EXISTS base.trade_cycles CASCADE;
-DROP TABLE IF EXISTS base.trade_strategies_history;
-DROP TABLE IF EXISTS base.trade_strategies CASCADE;
-DROP TYPE IF EXISTS base.trade_order_status;
-DROP TYPE IF EXISTS base.trade_order_type;
-DROP TYPE IF EXISTS base.trade_side;
-DROP TYPE IF EXISTS base.trade_cycle_status;
-DROP TYPE IF EXISTS base.trade_strategy_status;
+DROP TABLE IF EXISTS inotives_tradings.trade_pnl CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.trade_executions CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.trade_orders_history;
+DROP TABLE IF EXISTS inotives_tradings.trade_orders CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.trade_cycles_history;
+DROP TABLE IF EXISTS inotives_tradings.trade_cycles CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.trade_strategies_history;
+DROP TABLE IF EXISTS inotives_tradings.trade_strategies CASCADE;
+DROP TYPE IF EXISTS inotives_tradings.trade_order_status;
+DROP TYPE IF EXISTS inotives_tradings.trade_order_type;
+DROP TYPE IF EXISTS inotives_tradings.trade_side;
+DROP TYPE IF EXISTS inotives_tradings.trade_cycle_status;
+DROP TYPE IF EXISTS inotives_tradings.trade_strategy_status;

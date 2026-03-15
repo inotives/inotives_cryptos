@@ -2,10 +2,10 @@
 
 -- Daily aggregate metrics for assets captured from external data sources (e.g. CoinGecko, CoinMarketCap).
 -- This is an append/upsert time-series table — no soft delete, versioning, or history table needed.
-CREATE TABLE base.asset_metrics_1d (
+CREATE TABLE inotives_tradings.asset_metrics_1d (
     id          BIGSERIAL PRIMARY KEY,
-    asset_id    BIGINT NOT NULL REFERENCES base.assets(id)       DEFERRABLE INITIALLY DEFERRED,
-    source_id   BIGINT NOT NULL REFERENCES base.data_sources(id) DEFERRABLE INITIALLY DEFERRED,
+    asset_id    BIGINT NOT NULL REFERENCES inotives_tradings.assets(id)       DEFERRABLE INITIALLY DEFERRED,
+    source_id   BIGINT NOT NULL REFERENCES inotives_tradings.data_sources(id) DEFERRABLE INITIALLY DEFERRED,
     metric_date DATE   NOT NULL,
 
     -- OHLCV
@@ -45,14 +45,14 @@ CREATE TABLE base.asset_metrics_1d (
     CONSTRAINT uq_asset_metrics_1d UNIQUE (asset_id, metric_date, source_id)
 );
 
-CREATE INDEX ON base.asset_metrics_1d (asset_id, metric_date DESC);
-CREATE INDEX ON base.asset_metrics_1d (metric_date DESC);
-CREATE INDEX ON base.asset_metrics_1d (source_id);
+CREATE INDEX ON inotives_tradings.asset_metrics_1d (asset_id, metric_date DESC);
+CREATE INDEX ON inotives_tradings.asset_metrics_1d (metric_date DESC);
+CREATE INDEX ON inotives_tradings.asset_metrics_1d (source_id);
 
 -- Auditing trigger only (no soft delete or versioning for time-series data)
 CREATE TRIGGER auditing_trigger_asset_metrics_1d
-    BEFORE INSERT OR UPDATE ON base.asset_metrics_1d
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.asset_metrics_1d
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 -- migrate:down
-DROP TABLE IF EXISTS base.asset_metrics_1d CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.asset_metrics_1d CASCADE;

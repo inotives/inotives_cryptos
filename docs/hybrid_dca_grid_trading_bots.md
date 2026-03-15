@@ -1,6 +1,6 @@
 # Hybrid DCA Grid Trading Bots — Technical Design
 
-This document describes the full technical design of the Hybrid Grid + Regime-Switching trading system. It covers strategy logic, indicator calculations, capital coordination, the data pipeline, and database layout — with worked examples throughout.
+This document describes the full technical design of the Hybrid Grid + Regime-Switching trading system. It covers strategy logic, indicator calculations, capital coordination, intraday safeguards, the data pipeline, and database layout — with worked examples throughout.
 
 ---
 
@@ -11,7 +11,7 @@ This document describes the full technical design of the Hybrid Grid + Regime-Sw
 3. [DCA Grid Strategy](#3-dca-grid-strategy)
 4. [Trend Following Strategy](#4-trend-following-strategy)
 5. [Hybrid Capital Coordinator](#5-hybrid-capital-coordinator)
-6. [Intraday Circuit Breaker](#6-intraday-circuit-breaker)
+6. [Intraday Safeguards](#6-intraday-safeguards)
 7. [Daily Data Pipeline](#7-daily-data-pipeline)
 8. [Database Schema](#8-database-schema)
 9. [Bot Runtime Architecture](#9-bot-runtime-architecture)
@@ -25,8 +25,8 @@ The system runs two complementary strategies simultaneously, switching capital b
 
 ```
                          ┌─────────────────────┐
-                         │  Daily Pipeline      │
-                         │  02:00 UTC           │
+                         │  Data Bot            │
+                         │  02:00 UTC daily     │
                          │  OHLCV → Indicators  │
                          │       → Regime Score │
                          └──────────┬──────────┘
@@ -59,6 +59,7 @@ The system runs two complementary strategies simultaneously, switching capital b
 - Capital scaling is applied **at cycle-open time only** — an open cycle always runs to completion with the capital it started with. No mid-cycle resizing.
 - When the market transitions from trend → sideways, **trend positions are not hard-closed**. They exit naturally via their trailing stop while the grid begins placing orders.
 - If the intraday price deviates drastically from the daily open (circuit breaker), the Regime Score is overridden to 0 for that tick — protecting against flash crash entries.
+- Both strategies use **live intraday data** (exchange candles, price observations) to compensate for the 24-hour gap between daily indicator updates.
 
 ---
 
@@ -167,36 +168,36 @@ Between 0.8–1.2: score = (1.2 - ratio) / (1.2 - 0.8) × 100
 
 ---
 
-### Regime Score Examples
+### Regime Score Worked Examples
 
-**BTC March 2024 (Halving bull run):**
+**Example A — BTC in a strong bull run (halving rally):**
 ```
-ADX = 45.0  → score_adx   = 100.0
+ADX = 45.0   → score_adx   = 100.0
 Slope = 5.1% → score_slope = 100.0
 VolR = 0.65  → score_vol   = 100.0
 
 RS = 100×0.4 + 100×0.4 + 100×0.2 = 100.0
-→ Strong Trend: 100% capital to Trend Following
+→ Strong Trend: 100% capital to Trend Following, DCA Grid paused
 ```
 
-**BTC November 2021 (Peak bull):**
+**Example B — BTC peak bull (high momentum, starting to get volatile):**
 ```
-ADX = 35.7   → score_adx   = 83.3
-Slope = 2.5% → score_slope = 100.0
-VolR = 0.77  → score_vol   = 107.5 → capped at 100.0
+ADX = 35.7   → score_adx   = 50 + (35.7-25)/(40-25) × 50 = 85.7
+Slope = 2.5% → score_slope = 100.0  (capped, well above 0.5%)
+VolR = 0.77  → score_vol   = (1.2-0.77)/(1.2-0.8) × 100 = 100.0 (capped)
 
-RS = 83.3×0.4 + 100×0.4 + 100×0.2 = 93.3 → 74.3 (rounded)
+RS = 85.7×0.4 + 100×0.4 + 100×0.2 = 94.3
 → Strong Trend: Trend Following dominates
 ```
 
-**BTC March 2026 (Current correction):**
+**Example C — BTC correction (downtrend, choppy):**
 ```
-ADX = 33.75  → score_adx   = 79.2
-Slope = −1.5% → score_slope = 0.0  (negative slope)
+ADX = 33.75  → score_adx   = 50 + (33.75-25)/(40-25) × 50 = 79.2
+Slope = −1.5% → score_slope = 0.0  (negative slope → no uptrend)
 VolR = 1.55  → score_vol   = 0.0  (very choppy)
 
 RS = 79.2×0.4 + 0×0.4 + 0×0.2 = 31.7
-→ DCA Grid gets 68.3% of capital, Trend idles
+→ DCA Grid gets 68.3% of capital, Trend idles (RS < 61)
 ```
 
 ---
@@ -204,10 +205,9 @@ RS = 79.2×0.4 + 0×0.4 + 0×0.2 = 31.7
 ### Where it's stored
 
 ```sql
--- base.asset_market_regime (append-only, one row per asset per day)
 SELECT metric_date, raw_adx, raw_slope, raw_vol_ratio,
        score_adx, score_slope, score_vol, final_regime_score
-FROM base.asset_market_regime
+FROM inotives_tradings.asset_market_regime
 WHERE asset_id = 26   -- BTC
 ORDER BY metric_date DESC LIMIT 5;
 ```
@@ -264,7 +264,7 @@ Level 4: target = 70000 × (1 - 4×0.015) = $65,800  capital = 1000 × 3/10 = $3
 Level 5: target = 70000 × (1 - 5×0.015) = $64,750  capital = 1000 × 3/10 = $300
 ```
 
-**Fee-adjusted quantities** (maker fee = 0.25%):
+**Fee-adjusted quantities** (Crypto.com maker fee = 0.25%):
 ```
 qty = capital / (target_price × (1 + 0.0025))
 
@@ -274,7 +274,9 @@ Level 4: 300 / (65800 × 1.0025) = 0.004554 BTC
 
 **Stop loss** — placed one spacing below the deepest level:
 ```
-stop_loss = Level5_price × (1 - 0.015) = 64750 × 0.985 = $63,779
+stop_loss = Level5_price × (1 - grid_spacing_pct)
+          = 64750 × (1 - 0.015)
+          = $63,779
 ```
 
 ---
@@ -288,8 +290,13 @@ target_sell = avg_entry_price × (1 + profit_target% + taker_fee%)
 
 **Example:** If levels 1–3 filled (prices $68,950 / $67,900 / $66,850):
 ```
-avg_entry = (100×68950 + 100×67900 + 200×66850) / 400 = $67,387.50
-target_sell = 67387.50 × (1 + 0.015 + 0.005) = 67387.50 × 1.020 = $68,735.25
+Total BTC = 0.001446 + 0.001469 + 0.002986 = 0.005901 BTC
+Total cost = $100 + $100 + $200 = $400
+
+avg_entry = 400 / 0.005901 = $67,786
+target_sell = 67786 × (1 + 0.015 + 0.005)
+            = 67786 × 1.020
+            = $69,142
 ```
 
 ---
@@ -311,6 +318,31 @@ All must pass before a new cycle opens:
 
 ---
 
+### Intraday Volatility Guard
+
+Before filling grid levels, the DCA Grid checks whether the **4-hour price range** exceeds the daily ATR. If so, the market is moving too fast for safe grid placement and new fills are paused.
+
+```
+intraday_range = MAX(price) - MIN(price) over last 4 hours
+                 (from inotives_tradings.price_observations)
+
+if intraday_range > daily_ATR(14):
+    → PAUSE new grid fills this tick
+```
+
+**Example: BTC with ATR(14) = $2,100**
+
+```
+Last 4 hours: high = $71,500, low = $68,800
+intraday_range = 71500 - 68800 = $2,700
+
+$2,700 > $2,100  → PAUSE (market too volatile for grid fills)
+```
+
+This prevents the grid from chasing a fast-moving market where all levels could fill in minutes during a sharp dump.
+
+---
+
 ### Defensive Grid Mode
 
 When the normal entry conditions fail (downtrend or golden cross absent) but the strategy has `defensive_mode_enabled: true`, the bot checks for a **bounce signal**:
@@ -328,9 +360,20 @@ Defensive overrides:
   weights           = [1,1,1,1,1] (equal weight — conservative sizing)
 ```
 
+**Example: BTC at $62,000, SMA200 = $65,000 (downtrend), intraday RSI(1h) = 32**
+
+```
+Normal entry: BLOCKED (price < SMA200, golden cross absent)
+Defensive check:
+  In downtrend? YES (62000 < 65000)
+  RSI(1h) = 32 < 40 (oversold threshold)?  YES → bounce signal detected
+
+→ Open defensive grid with wider spacing (ATR × 0.8) and 2.5% profit target
+```
+
 ---
 
-### Hybrid Coordination Hook (Phase 4)
+### Hybrid Coordination Hook
 
 Before opening a cycle, the DCA Grid checks the coordinator:
 
@@ -350,10 +393,10 @@ if await trend_has_priority(conn, asset_id, regime_score):
 capital_per_cycle = capital_per_cycle × (100 - RS) / 100
 ```
 
-**Example at RS = 45:**
+**Example at RS = 45, configured capital = $1,000:**
 ```
 Grid capital = 1000 × (100 - 45) / 100 = $550
-(Trend capital = 500 × 45/100 = $225 if it were to enter)
+(Trend capital = 500 × 45/100 = $225, but trend won't enter since RS < 61)
 ```
 
 ---
@@ -370,7 +413,7 @@ This strategy is active when **RS ≥ 61** (strong trending market).
 
 ### Entry Conditions
 
-All six must pass:
+All six must pass, plus an intraday RSI guard:
 
 | # | Condition | Default | Rationale |
 |---|---|---|---|
@@ -380,6 +423,9 @@ All six must pass:
 | 4 | `ADX(14) >= min_adx` | 25.0 | Trend has strength, not just a spike |
 | 5 | `RSI(14) < rsi_entry_max` | 70.0 | Not entering at overbought extreme |
 | 6 | `ATR% < max_atr_pct_entry` | 6.0% | Not entering during a volatility spike |
+| 7 | Intraday RSI(1h) < `rsi_entry_max` | 70.0 | Live confirmation — not overbought right now |
+
+The intraday RSI guard (condition 7) runs **after** conditions 1–6 pass. It fetches live 1-hour candles from the exchange and computes RSI using Wilder's smoothing. This catches cases where the daily RSI looked fine at 02:00 UTC but the market has since rallied into overbought territory.
 
 **Example: BTC at $72,000, 5-day high = $71,500**
 
@@ -388,9 +434,18 @@ RS     = 74.3   ≥ 61   ✓
 EMA50  = 68,000 > EMA200 = 55,000  ✓
 Price  = 72,000 > 5d_high = 71,500  ✓
 ADX    = 38     ≥ 25   ✓
-RSI    = 62     < 70   ✓
+RSI    = 62     < 70   ✓  (daily)
 ATR%   = 2.8%   < 6.0% ✓
+RSI(1h) = 58    < 70   ✓  (intraday — live from exchange)
 → All conditions pass — ENTER
+```
+
+**Example: Entry blocked by intraday RSI:**
+
+```
+Daily conditions 1–6: ALL PASS (RSI daily = 65)
+RSI(1h) = 73  ≥ 70  ✗  (intraday overbought)
+→ SKIP entry — market rallied since last daily update
 ```
 
 ---
@@ -429,10 +484,12 @@ initial_stop = entry_price - (atr_stop_multiplier × ATR)
 Example: 72,000 - (2.0 × 2,100) = $67,800
 ```
 
-**Trailing stop** (moves up as price rises):
+**Trailing stop** (moves up as price rises, uses live intraday ATR):
 ```
 trailing_stop = highest_price_since_entry - (atr_trail_multiplier × ATR)
 ```
+
+The trailing stop prefers **live intraday ATR** computed from exchange 1-hour candles (29 candles, Wilder's smoothing). If the exchange call fails or returns insufficient data, it falls back to the daily ATR from `inotives_tradings.asset_indicators_1d`.
 
 **Effective stop** (the one that actually triggers):
 ```
@@ -441,26 +498,28 @@ effective_stop = MAX(initial_stop, trailing_stop)
 
 The effective stop **only moves upward** — it locks in profit as the trade goes in your favour.
 
-**Walk-through example:**
+**Walk-through example (entry at $72,000, ATR = $2,100):**
 
 ```
-Entry at $72,000   ATR = $2,100   initial_stop = $67,800
+Entry: initial_stop = 72000 - (2.0 × 2100) = $67,800
 
-After day 1: price = $74,500
-  trailing_stop = 74500 - (3.0 × 2100) = $68,200
-  effective_stop = MAX(67800, 68200) = $68,200  ↑ stop moved up
+Day 1: price = $74,500, intraday ATR = $2,050
+  trailing_stop = 74500 - (3.0 × 2050) = $68,350
+  effective_stop = MAX(67800, 68350) = $68,350  ↑ stop moved up
 
-After day 5: price = $81,000  (new high)
-  trailing_stop = 81000 - 6300 = $74,700
-  effective_stop = MAX(67800, 74700) = $74,700  ↑ significant lock-in
+Day 5: price = $81,000, intraday ATR = $1,900 (volatility cooling)
+  trailing_stop = 81000 - (3.0 × 1900) = $75,300
+  effective_stop = MAX(67800, 75300) = $75,300  ↑ significant lock-in
 
-After day 8: price drops to $74,200
-  effective_stop = $74,700  → TRIGGERED
-  Exit at $74,200
-  PnL = (74200 - 72000) / 72000 × 100 = +3.06%
+Day 8: price drops to $74,800
+  effective_stop = $75,300 → TRIGGERED
+  Exit at $74,800
+
+  PnL = (74800 - 72000) × 0.001184 = $3.31
+  Return = (74800 - 72000) / 72000 × 100 = +3.89%
 ```
 
-Notice: the stop was raised to protect profit. Without the trailing stop, the initial stop was $4,200 away — a 5.8% loss if hit. With the trailing stop after the $81k high, the trade exits near breakeven even after the pullback.
+Notice: the trailing stop used live ATR that tightened as volatility decreased (from $2,100 at entry to $1,900 by day 5). This locked in more profit than using the stale daily ATR would have.
 
 ---
 
@@ -498,10 +557,10 @@ if regime_score_raw <= 50 and await grid_has_active_cycle(conn, asset_id):
 capital_allocated = capital_allocated × RS / 100
 ```
 
-**Example at RS = 74:**
+**Example at RS = 74, configured capital = $500:**
 ```
 Trend capital = 500 × 74/100 = $370
-Grid capital  = 1000 × (100-74)/100 = $260  (grid likely paused since RS > 61)
+Grid capital  = 1000 × (100-74)/100 = $260  (grid paused since RS > 61)
 ```
 
 ---
@@ -515,7 +574,7 @@ Grid_Limit  = configured_capital × (100 - RS) / 100
 Trend_Limit = configured_capital × RS / 100
 ```
 
-**Scale table (assuming grid configured at $1,000, trend at $500):**
+**Scale table (grid configured at $1,000, trend at $500):**
 
 | RS | Grid Capital | Trend Capital | Grid Status | Trend Status |
 |---|---|---|---|---|
@@ -568,15 +627,19 @@ This avoids selling at the worst moment (when the regime score drops due to a pu
 
 ---
 
-## 6. Intraday Circuit Breaker
+## 6. Intraday Safeguards
 
-The regime score is computed once per day at 02:00 UTC. Between pipeline runs, extreme intraday events can make the daily RS stale and dangerous.
+The regime score and technical indicators are computed once per day at 02:00 UTC. Between pipeline runs, up to 24 hours of market movement can make daily data stale. Four intraday safeguards compensate for this gap.
 
-### Trigger Condition
+### 6.1 Circuit Breaker (Hybrid Coordinator)
+
+Protects against opening new cycles during extreme intraday moves.
+
+**Data source:** Today's opening price is the **first `price_observations` row** of the current UTC day (written by the pricing bot). Falls back to the latest daily bar from `asset_metrics_1d` only if no intraday observations exist yet.
 
 ```
-daily_open    = most recent open_price from asset_metrics_1d
-current_price = latest observed_price from price_observations
+daily_open    = first price_observations of today (or fallback: asset_metrics_1d.open_price)
+current_price = latest price_observations
 atr_14        = from asset_indicators_1d
 
 deviation = |current_price - daily_open|
@@ -586,38 +649,71 @@ if deviation > threshold:
     CIRCUIT BREAKER ACTIVE → RS overridden to 0.0
 ```
 
-**Example: BTC daily open $70,000, ATR = $2,100**
+**Example: BTC daily open $70,000 (from first pricing bot tick), ATR = $2,100**
 
 ```
 threshold = 2.0 × 2100 = $4,200
 
-If price drops to $65,300:
+At 14:00 UTC, price drops to $65,300:
   deviation = |65300 - 70000| = $4,700 > $4,200  → TRIGGERED
 
 Effect: RS forced to 0.0 for this tick
-  → DCA Grid won't enter (regime check blocks at RS=0 for defensive entry)
+  → DCA Grid won't enter (regime check blocks at RS=0)
   → Trend won't enter (RS 0 < 61)
-  → Existing open cycles are NOT affected (their own circuit breakers handle that)
+  → Existing open cycles are NOT affected (their own stops handle that)
 ```
 
-This protects against opening a brand-new grid cycle into a flash crash while the daily pipeline has not yet caught up.
+### 6.2 Live Intraday ATR (Trend Following)
+
+The trailing stop uses **live ATR** computed from exchange 1-hour candles instead of the stale daily ATR.
+
+- Fetches 29 most recent 1h candles via `exchange.fetch_ohlcv(symbol, "1h", limit=29)`
+- Computes ATR(14) using Wilder's smoothing (same method as daily pipeline)
+- Falls back to daily ATR if the exchange call fails or returns < 15 candles
+
+**Why this matters:** If volatility contracts intraday, the live ATR tightens the trailing stop — locking in more profit. If volatility expands, the stop widens — avoiding premature exit on a noisy pullback.
+
+### 6.3 Intraday RSI Guard (Trend Following)
+
+Blocks new trend entries when the market is overbought **right now**, even if the daily RSI looked fine at 02:00 UTC.
+
+- Fetches 29 most recent 1h candles via `exchange.fetch_ohlcv(symbol, "1h", limit=29)`
+- Computes RSI(14) using Wilder's smoothing
+- If `RSI(1h) >= rsi_entry_max` (default 70), entry is skipped
+
+### 6.4 Intraday Volatility Guard (DCA Grid)
+
+Pauses new grid level fills when the 4-hour price range exceeds the daily ATR.
+
+- Queries `MAX(price) - MIN(price)` from `price_observations` over the last 4 hours
+- Compares against daily ATR(14)
+- If `intraday_range > daily_ATR`, fills are paused for that tick
+
+**Summary table:**
+
+| Guard | Source | Used by | Trigger |
+|---|---|---|---|
+| Circuit breaker | `price_observations` daily open vs current | Hybrid coordinator | `\|price - open\| > 2 × ATR` → RS = 0 |
+| Live ATR | Exchange 1h OHLCV (29 candles) | Trend trailing stop | Replaces stale daily ATR |
+| Intraday RSI | Exchange 1h OHLCV (29 candles) | Trend entry guard | `RSI(1h) >= 70` → skip entry |
+| Volatility guard | `price_observations` 4h range | DCA Grid fill pause | `range > daily ATR` → pause fills |
 
 ---
 
 ## 7. Daily Data Pipeline
 
-The pipeline runs at **02:00 UTC daily** as a single Prefect flow, guaranteeing each step always sees fresh upstream data.
+The pipeline runs at **02:00 UTC daily** via `bots/data_bot/main.py`, a simple asyncio script scheduled by cron.
 
 ```
-daily_pipeline_flow(target_date)
+data_bot.main(target_date)
 │
-├── Step 1: coingecko_fetch_ohlcv_1d_flow
+├── Step 1: run_ohlcv_fetch(target_date)
 │     ├── For each allow-listed asset:
 │     │     GET /coins/{id}/ohlc?days=90          → OHLC data
 │     │     GET /coins/{id}/market_chart?days=91  → volume + market cap
-│     └── Upsert → base.asset_metrics_1d
+│     └── Upsert → inotives_tradings.asset_metrics_1d
 │
-├── Step 2: compute_indicators_daily_flow
+├── Step 2: run_indicators_daily()
 │     ├── Load last 400 days of OHLCV per asset
 │     ├── Compute via pandas-ta:
 │     │     ATR(14/20), ATR%, volatility_regime
@@ -625,42 +721,55 @@ daily_pipeline_flow(target_date)
 │     │     MACD(12,26,9), RSI(14), Bollinger Bands(20)
 │     │     Volume SMA(20), volume ratio
 │     │     ADX(14), EMA slope 5d%, volatility ratio ATR/StdDev
-│     └── Upsert today → base.asset_indicators_1d
+│     └── Upsert today → inotives_tradings.asset_indicators_1d
 │
-└── Step 3: compute_market_regime_daily_flow
+└── Step 3: run_regime_daily()
       ├── Load adx_14, ema_slope_5d, vol_ratio_14 from indicators
       ├── Normalise each to 0–100
       ├── Compute RS = score_adx×0.4 + score_slope×0.4 + score_vol×0.2
-      └── Upsert today → base.asset_market_regime
+      └── Upsert today → inotives_tradings.asset_market_regime
+```
+
+### Running the pipeline
+
+```bash
+# Via Makefile
+make daily-data                     # Yesterday (default)
+make daily-data date=2026-03-14     # Specific date
+
+# Direct invocation
+uv run --env-file configs/envs/.env.local python -m bots.data_bot.main --date 2026-03-14
 ```
 
 ### Backfill commands
 
 ```bash
-# Backfill all indicators for all assets
-uv run --env-file configs/envs/.env.local --project apps/pipelines python - <<'EOF'
-import asyncio, sys
-sys.path.insert(0, "apps/pipelines")
-from src.flows.compute_indicators_1d import compute_indicators_backfill_flow
-asyncio.run(compute_indicators_backfill_flow())
-EOF
+# Backfill indicators for specific assets
+uv run --env-file configs/envs/.env.local python -c \
+    "import asyncio; from common.data.indicators import run_indicators_backfill; asyncio.run(run_indicators_backfill(asset_codes=['btc', 'eth']))"
 
-# Backfill all regime scores for all assets
-uv run --env-file configs/envs/.env.local --project apps/pipelines python - <<'EOF'
-import asyncio, sys
-sys.path.insert(0, "apps/pipelines")
-from src.flows.compute_market_regime_1d import compute_market_regime_backfill_flow
-asyncio.run(compute_market_regime_backfill_flow())
-EOF
+# Backfill regime scores for all assets
+uv run --env-file configs/envs/.env.local python -c \
+    "import asyncio; from common.data.market_regime import run_regime_backfill; asyncio.run(run_regime_backfill())"
+```
+
+### Cron setup
+
+```bash
+# Install via cron manager
+python -m common.tools.manage_cron install daily-data       # 02:00 UTC daily
+python -m common.tools.manage_cron install coingecko-sync   # 01:00 UTC Sunday
 ```
 
 ---
 
 ## 8. Database Schema
 
+All tables live in the `inotives_tradings` schema (trading data) or `coingecko` schema (raw reference data).
+
 ### Core Tables
 
-#### `base.asset_indicators_1d`
+#### `inotives_tradings.asset_indicators_1d`
 
 Pre-computed daily technical indicators. One row per (asset, date).
 
@@ -680,7 +789,7 @@ Pre-computed daily technical indicators. One row per (asset, date).
 | `bb_upper/middle/lower/width` | NUMERIC | Bollinger Bands(20, 2σ) |
 | `volume_sma_20`, `volume_ratio` | NUMERIC | Volume vs 20-day average |
 
-#### `base.asset_market_regime`
+#### `inotives_tradings.asset_market_regime`
 
 Daily regime scores. One row per (asset, date). Append-only.
 
@@ -697,20 +806,20 @@ Daily regime scores. One row per (asset, date). Append-only.
 **Query example — last 7 days for BTC:**
 ```sql
 SELECT r.metric_date,
-       round(r.raw_adx,1)          AS adx,
-       round(r.raw_slope,3)        AS slope_pct,
-       round(r.score_adx,0)        AS s_adx,
-       round(r.score_slope,0)      AS s_slope,
-       round(r.score_vol,0)        AS s_vol,
+       round(r.raw_adx,1)            AS adx,
+       round(r.raw_slope,3)          AS slope_pct,
+       round(r.score_adx,0)          AS s_adx,
+       round(r.score_slope,0)        AS s_slope,
+       round(r.score_vol,0)          AS s_vol,
        round(r.final_regime_score,1) AS rs
-FROM base.asset_market_regime r
-JOIN base.assets a ON a.id = r.asset_id
+FROM inotives_tradings.asset_market_regime r
+JOIN inotives_tradings.assets a ON a.id = r.asset_id
 WHERE a.code = 'btc'
 ORDER BY r.metric_date DESC
 LIMIT 7;
 ```
 
-#### `base.trade_strategies`
+#### `inotives_tradings.trade_strategies`
 
 One row per configured strategy. Strategy-specific config in `metadata` JSONB.
 
@@ -719,12 +828,12 @@ One row per configured strategy. Strategy-specific config in `metadata` JSONB.
 | `strategy_type` | TEXT | `DCA_GRID` or `TREND_FOLLOW` |
 | `base_asset_id` | BIGINT | Asset being traded (e.g. BTC) |
 | `quote_asset_id` | BIGINT | Quote currency (e.g. USDT) |
-| `venue_id` | BIGINT | Trading venue (paper or live) |
+| `venue_id` | BIGINT | Trading venue |
 | `maker_fee_pct` / `taker_fee_pct` | NUMERIC | Live-synced at bot startup |
 | `status` | TEXT | `ACTIVE` / `PAUSED` / `ARCHIVED` |
 | `metadata` | JSONB | All strategy-type-specific parameters |
 
-#### `base.trade_cycles`
+#### `inotives_tradings.trade_cycles`
 
 One row per grid cycle or trend trade.
 
@@ -737,7 +846,7 @@ One row per grid cycle or trend trade.
 | `stop_loss_price` | NUMERIC | Current effective stop (updated every tick for trend) |
 | `metadata` | JSONB | DCA: grid params; Trend: entry/highest/stop state |
 
-#### `base.trade_grid_levels`
+#### `inotives_tradings.trade_grid_levels`
 
 Individual limit buy orders for the DCA Grid.
 
@@ -751,14 +860,14 @@ Individual limit buy orders for the DCA Grid.
 | `atr_value` | NUMERIC | ATR at time of level creation |
 | `weight` | NUMERIC | Capital weight assigned to this level |
 
-#### `base.capital_locks`
+#### `inotives_tradings.capital_locks`
 
 Capital reserved per active cycle, ensuring the bot can't over-allocate.
 
 ```sql
 -- How much capital is free right now?
-SELECT * FROM base.venue_available_capital
-WHERE venue_id = 1;  -- Crypto.com (Paper)
+SELECT * FROM inotives_tradings.venue_available_capital
+WHERE venue_id = 1;
 ```
 
 ---
@@ -769,22 +878,28 @@ WHERE venue_id = 1;  -- Crypto.com (Paper)
 
 ```
 Terminal 1: make pricing-bot
-  └── pricing_bot.main (asyncio polling, 60s)
-        └── polls Crypto.com tickers every 60s
-        └── writes to base.price_observations (TimescaleDB, 90d retention)
+  └── bots.pricing_bot.main (asyncio polling, 60s)
+        └── polls exchange tickers every 60s
+        └── writes to inotives_tradings.price_observations
 
 Terminal 2: make trader-bot
-  └── trader_bot.main (asyncio polling, 60s)
-        ├── startup: sync live fees from exchange → base.trade_strategies
+  └── bots.trader_bot.main (asyncio polling, 60s)
+        ├── startup: sync live fees from exchange → inotives_tradings.trade_strategies
         └── each tick:
-              load_active_strategies()  → 4 strategies (2 DCA + 2 Trend)
+              load_active_strategies()  → N strategies (DCA + Trend per asset)
               for each strategy:
                 dispatch(exchange, strategy)
                   └── DCA_GRID     → DcaGridStrategy.process()
                   └── TREND_FOLLOW → TrendFollowingStrategy.process()
+
+Cron (02:00 UTC daily): make daily-data
+  └── bots.data_bot.main
+        ├── OHLCV fetch (CoinGecko)
+        ├── Technical indicators (pandas-ta)
+        └── Market regime scores
 ```
 
-### One tick — DCA Grid (no open cycle)
+### One tick — DCA Grid (no open cycle, RS = 31.7)
 
 ```
 1. Load latest indicators for the asset
@@ -792,14 +907,15 @@ Terminal 2: make trader-bot
    → RS = 31.7, no circuit breaker (price within 2×ATR of daily open)
 3. RS < 61 → grid not paused
 4. trend_has_priority()? RS=31.7 < 50 → NO, grid has priority
-5. Load current price from price_observations
-6. _check_entry_conditions():
-   - require_uptrend: price < SMA200? → NO (golden cross absent)
+5. Scale capital: 1000 × (100-31.7)/100 = $683
+6. Load current price from price_observations
+7. _check_entry_conditions():
+   - require_uptrend: price < SMA200? → YES (in downtrend)
    - defensive mode? RSI(1h) = 55 ≥ 40 → no bounce signal
-7. → Log "no bounce signal" and return (no entry this tick)
+8. → Log "no bounce signal" and return (no entry this tick)
 ```
 
-### One tick — Trend Follow (no open cycle)
+### One tick — Trend Follow (no open cycle, RS = 31.7)
 
 ```
 1. Load indicators (ema_50, ema_200, adx_14, etc.)
@@ -810,24 +926,26 @@ Terminal 2: make trader-bot
 4. → Log "regime_score=31.7 < 61.0" and return (idle)
 ```
 
-### One tick — Trend Follow (RS = 74, no open cycle)
+### One tick — Trend Follow (RS = 74.3, no open cycle)
 
 ```
-1. Indicators: ema_50=72000, ema_200=55000, adx=38, rsi=62, atr_pct=2.8%
+1. Indicators: ema_50=68000, ema_200=55000, adx=38, rsi=62, atr_pct=2.8%
 2. RS = 74.3
 3. grid_has_active_cycle()? → NO (grid paused at RS>61)
-4. capital_allocated = 500 × 74/100 = $370
+4. capital_allocated = 500 × 74.3/100 = $371.50
 5. _check_entry_conditions():
    - RS 74.3 ≥ 61 ✓
-   - EMA50 72000 > EMA200 55000 ✓
+   - EMA50 68000 > EMA200 55000 ✓
    - price 72000 > 5d_high 71500 ✓
    - ADX 38 ≥ 25 ✓
    - RSI 62 < 70 ✓
    - ATR% 2.8% < 6.0% ✓  → ALL PASS
-6. position_size = (370 × 0.01) / (2100 × 2.0) = 0.000881 BTC
-7. Place market BUY for 0.000881 BTC
-8. Write trade_cycles + trade_orders + capital_locks + system_events
-9. initial_stop = 72000 - (2×2100) = $67,800
+6. Intraday RSI guard: RSI(1h) = 58 < 70 ✓
+7. position_size = (371.50 × 0.01) / (2100 × 2.0) = 0.000885 BTC
+8. Fee adjustment: 0.000885 / 1.005 = 0.000881 BTC
+9. Place market BUY for 0.000881 BTC
+10. Write trade_cycles + trade_orders + capital_locks + system_events
+11. initial_stop = 72000 - (2×2100) = $67,800
 ```
 
 ---
@@ -850,8 +968,6 @@ Terminal 2: make trader-bot
     "max_atr_pct_entry":          6.0,
     "rsi_entry_max":              60,
     "reserve_capital_pct":        30,
-    "maker_fee_pct":              0.0025,
-    "taker_fee_pct":              0.005,
     "circuit_breaker_atr_pct":    8.0,
     "max_expansions":             1,
     "expansion_levels":           2,
@@ -881,9 +997,7 @@ Terminal 2: make trader-bot
     "min_regime_score":     61.0,
     "rsi_entry_max":        70.0,
     "max_atr_pct_entry":    6.0,
-    "reserve_capital_pct":  20,
-    "maker_fee_pct":        0.0025,
-    "taker_fee_pct":        0.005
+    "reserve_capital_pct":  20
 }
 ```
 
@@ -910,4 +1024,4 @@ To make the system **more conservative** (prefers grid, only enters trend on ver
 
 ---
 
-*This document reflects the system as of INO-0002. See `CLAUDE.md` for current development state and next planned features.*
+*This document reflects the system as of INO-0003. See `CLAUDE.md` for current development state and next planned features.*

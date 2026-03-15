@@ -16,10 +16,10 @@
 --   event_type = 'GRID_RETUNED'
 --   payload    = { old: {...}, new: {...} }
 -- -----------------------------------------------------------------------------
-CREATE TABLE base.trade_dca_cycle_details (
+CREATE TABLE inotives_tradings.trade_dca_cycle_details (
     id          BIGSERIAL PRIMARY KEY,
-    cycle_id    BIGINT NOT NULL UNIQUE REFERENCES base.trade_cycles(id)     DEFERRABLE INITIALLY DEFERRED,
-    strategy_id BIGINT NOT NULL        REFERENCES base.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,
+    cycle_id    BIGINT NOT NULL UNIQUE REFERENCES inotives_tradings.trade_cycles(id)     DEFERRABLE INITIALLY DEFERRED,
+    strategy_id BIGINT NOT NULL        REFERENCES inotives_tradings.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,
 
     -- Immutable snapshot captured at cycle open
     atr_at_open NUMERIC(36, 18) NOT NULL,  -- ATR(14) value when the cycle was opened
@@ -43,12 +43,12 @@ CREATE TABLE base.trade_dca_cycle_details (
 );
 
 -- Bot query: fetch DCA tuning state for all open cycles of a strategy
-CREATE INDEX ON base.trade_dca_cycle_details (strategy_id);
+CREATE INDEX ON inotives_tradings.trade_dca_cycle_details (strategy_id);
 
 CREATE TRIGGER auditing_trigger_trade_dca_cycle_details
-    BEFORE INSERT OR UPDATE ON base.trade_dca_cycle_details
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.trade_dca_cycle_details
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 
 -- migrate:down
-DROP TABLE IF EXISTS base.trade_dca_cycle_details CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.trade_dca_cycle_details CASCADE;

@@ -10,9 +10,9 @@
 -- Raw values are stored alongside normalized scores for full auditability —
 -- if the bot takes a strange trade you can trace exactly which component
 -- dragged the final score up or down.
-CREATE TABLE base.asset_market_regime (
+CREATE TABLE inotives_tradings.asset_market_regime (
     id          BIGSERIAL PRIMARY KEY,
-    asset_id    BIGINT NOT NULL REFERENCES base.assets(id) DEFERRABLE INITIALLY DEFERRED,
+    asset_id    BIGINT NOT NULL REFERENCES inotives_tradings.assets(id) DEFERRABLE INITIALLY DEFERRED,
     metric_date DATE   NOT NULL,
 
     -- ── Raw indicator values (as-computed, before normalization) ──────────────
@@ -50,9 +50,9 @@ CREATE TABLE base.asset_market_regime (
     CONSTRAINT uq_asset_market_regime UNIQUE (asset_id, metric_date)
 );
 
-CREATE INDEX ON base.asset_market_regime (asset_id, metric_date DESC);
-CREATE INDEX ON base.asset_market_regime (metric_date DESC);
+CREATE INDEX ON inotives_tradings.asset_market_regime (asset_id, metric_date DESC);
+CREATE INDEX ON inotives_tradings.asset_market_regime (metric_date DESC);
 
 
 -- migrate:down
-DROP TABLE IF EXISTS base.asset_market_regime CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.asset_market_regime CASCADE;

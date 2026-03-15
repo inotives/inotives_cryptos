@@ -1,15 +1,15 @@
 -- migrate:up
 
--- Pre-computed daily technical indicators derived from base.asset_metrics_1d.
+-- Pre-computed daily technical indicators derived from inotives_tradings.asset_metrics_1d.
 -- Populated nightly by the indicators pipeline after new OHLCV data arrives.
 -- Strategy bots read from here instead of recomputing on every poll cycle.
 --
 -- All indicator values are nullable — a NULL means insufficient history was
 -- available to compute that indicator for the given date (e.g. SMA(200) needs
 -- at least 200 prior closes).
-CREATE TABLE base.asset_indicators_1d (
+CREATE TABLE inotives_tradings.asset_indicators_1d (
     id          BIGSERIAL PRIMARY KEY,
-    asset_id    BIGINT NOT NULL REFERENCES base.assets(id) DEFERRABLE INITIALLY DEFERRED,
+    asset_id    BIGINT NOT NULL REFERENCES inotives_tradings.assets(id) DEFERRABLE INITIALLY DEFERRED,
     metric_date DATE   NOT NULL,
 
     -- ── Volatility ────────────────────────────────────────────────────────────
@@ -57,14 +57,14 @@ CREATE TABLE base.asset_indicators_1d (
     CONSTRAINT uq_asset_indicators_1d UNIQUE (asset_id, metric_date)
 );
 
-CREATE INDEX ON base.asset_indicators_1d (asset_id, metric_date DESC);
-CREATE INDEX ON base.asset_indicators_1d (metric_date DESC);
+CREATE INDEX ON inotives_tradings.asset_indicators_1d (asset_id, metric_date DESC);
+CREATE INDEX ON inotives_tradings.asset_indicators_1d (metric_date DESC);
 
 -- Auditing trigger only (no soft delete / versioning for computed time-series)
 CREATE TRIGGER auditing_trigger_asset_indicators_1d
-    BEFORE INSERT OR UPDATE ON base.asset_indicators_1d
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.asset_indicators_1d
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 
 -- migrate:down
-DROP TABLE IF EXISTS base.asset_indicators_1d CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.asset_indicators_1d CASCADE;
