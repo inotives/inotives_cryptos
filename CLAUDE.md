@@ -65,7 +65,7 @@ common/data/  (cron-scheduled or manual)
 bots/data_bot/main.py  (02:00 UTC cron → OHLCV → indicators → regime)
       │
       ▼
-PostgreSQL (shared with inotives_aibots project)
+PostgreSQL (standalone Docker or shared instance)
   coingecko schema  (raw CoinGecko universe — reference library)
     · raw_coins · raw_platforms
   inotives_tradings schema  (curated internal allow-list + all trading data)
@@ -432,17 +432,17 @@ Capped at `capital_allocated / current_price`. Fee-adjusted via taker fee.
 ### Bootstrap (fresh environment)
 
 ```bash
-make bootstrap   # seeds data sources + syncs CG + allow-lists ETH/BTC/SOL
+make bootstrap   # seeds data sources + syncs CG + allow-lists ETH/SOL networks + BTC/ETH/SOL assets
 ```
 
 Internally runs in sequence:
 1. `make seed-data-sources` — seeds `inotives_tradings.data_sources` from CSV
-2. `make sync-coingecko-platforms` — populates `coingecko.raw_platforms` directly
-3. `make sync-coingecko-coins` — populates `coingecko.raw_coins` directly
-4. `make allowlist-network` × 3 — ethereum, bitcoin, solana
+2. `make sync-coingecko-platforms` — populates `coingecko.raw_platforms` (~440 platforms)
+3. `make sync-coingecko-coins` — populates `coingecko.raw_coins` (~18k coins)
+4. `make allowlist-network` × 2 — ethereum, solana (Bitcoin has no CoinGecko platform entry)
 5. `make allowlist-asset` × 3 — bitcoin, ethereum, solana
 
-> ETH/BTC/SOL are the default starting point. Edit the `bootstrap` target in Makefile or run `allowlist-*` individually to customise.
+> ETH/SOL networks + BTC/ETH/SOL assets are the default starting point. Edit the `bootstrap` target in Makefile or run `allowlist-*` individually to customise.
 
 ### Adding assets / networks after bootstrap
 
@@ -461,6 +461,159 @@ make seed-metrics-1d csv=db/seeds/btc_historical_data_20100513-20260309.csv
 uv run --env-file configs/envs/.env.local python -c \
     "import asyncio; from common.data.indicators import run_indicators_backfill; asyncio.run(run_indicators_backfill(asset_codes=['btc']))"
 ```
+
+---
+
+## Setup Guide (Clone to Trading-Ready)
+
+Complete step-by-step instructions to set up this project from a fresh clone. Follow every step in order.
+
+### Prerequisites
+
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) (v0.5+)
+- Docker (only needed if running standalone PostgreSQL)
+
+### Step 1 — Clone and install dependencies
+
+```bash
+git clone git@github-personal:inotives/inotives_cryptos.git inotives
+cd inotives
+make init
+```
+
+### Step 2 — Configure environment
+
+```bash
+cp configs/envs/.env.example configs/envs/.env.local
+```
+
+Edit `configs/envs/.env.local` — set at minimum:
+
+```env
+DB_CONTAINER_NAME=inotives_postgres   # Docker container name
+DB_HOST=localhost
+DB_PORT=5445
+DB_USER=inotives
+DB_PASSWORD=<your_password>
+DB_NAME=inotives                      # Database name (schemas live inside this)
+COINGECKO_API_KEY=<your_key>          # Free demo key from https://www.coingecko.com/en/api/pricing
+COINGECKO_API_KEY_TYPE=demo           # "demo" or "pro"
+```
+
+Exchange keys (`CRYPTOCOM_API_KEY`, `BINANCE_API_KEY`) are optional — only needed for live trading.
+
+### Step 3 — Ensure database is running
+
+```bash
+make db-ensure
+```
+
+This auto-detects the DB server and creates the database:
+1. Checks if `DB_HOST:DB_PORT` is reachable → if not, starts local Docker PostgreSQL via `make db-up`
+2. Creates the `DB_NAME` database on the server if it doesn't exist via `make db-create`
+
+### Step 4 — Run database migrations
+
+```bash
+make migrate-up
+```
+
+Applies all 27 migrations — creates `inotives_tradings` and `coingecko` schemas with all tables, triggers, and functions.
+
+Verify: `make migrate-status` (all should show `[X]`).
+
+### Step 5 — Bootstrap reference data
+
+```bash
+make bootstrap
+```
+
+Runs 5 steps in sequence:
+1. Seeds `inotives_tradings.data_sources` (6 sources: CoinGecko, CMC, 4 exchanges)
+2. Syncs `coingecko.raw_platforms` from CoinGecko API (~440 platforms)
+3. Syncs `coingecko.raw_coins` from CoinGecko API (~18k coins)
+4. Allow-lists default networks: Ethereum, Solana (Bitcoin has no CoinGecko platform entry)
+5. Allow-lists default assets: BTC, ETH, SOL
+
+After bootstrap, add more assets with:
+```bash
+python -m common.tools.manage_assets search-coins --query dogecoin   # find coingecko_id
+make allowlist-asset coingecko_id=dogecoin                           # add to allow-list
+```
+
+### Step 6 — Seed historical data (CRITICAL)
+
+**The trading bot will NOT work without historical data.** Technical indicators require a minimum of **220 days** of daily OHLCV data per asset. Without it, the indicator pipeline skips the asset entirely — no indicators, no regime score, no trading signals.
+
+CoinGecko free tier only provides ~90 days, which is insufficient. You must backfill from CoinMarketCap CSV exports.
+
+**6a. Download CSVs from CoinMarketCap:**
+- BTC: https://coinmarketcap.com/currencies/bitcoin/historical-data/
+- ETH: https://coinmarketcap.com/currencies/ethereum/historical-data/
+- SOL: https://coinmarketcap.com/currencies/solana/historical-data/
+- Save to `db/seeds/` with naming: `{asset_code}_historical_data_{YYYYMMDD}.csv`
+
+**6b. Import OHLCV and backfill indicators for each asset:**
+
+```bash
+# Import OHLCV from CSV
+make seed-metrics-1d csv=db/seeds/btc_historical_data_20260315.csv
+make seed-metrics-1d csv=db/seeds/eth_historical_data_20260315.csv
+make seed-metrics-1d csv=db/seeds/sol_historical_data_20260315.csv
+
+# Backfill technical indicators (per asset)
+uv run --env-file configs/envs/.env.local python -c \
+    "import asyncio; from common.data.indicators import run_indicators_backfill; asyncio.run(run_indicators_backfill(asset_codes=['btc']))"
+uv run --env-file configs/envs/.env.local python -c \
+    "import asyncio; from common.data.indicators import run_indicators_backfill; asyncio.run(run_indicators_backfill(asset_codes=['eth']))"
+uv run --env-file configs/envs/.env.local python -c \
+    "import asyncio; from common.data.indicators import run_indicators_backfill; asyncio.run(run_indicators_backfill(asset_codes=['sol']))"
+
+# Backfill regime scores (all assets at once)
+uv run --env-file configs/envs/.env.local python -c \
+    "import asyncio; from common.data.market_regime import run_regime_backfill; asyncio.run(run_regime_backfill())"
+```
+
+**Recommendation:** Download at least 1–2 years of historical data per asset.
+
+### Step 7 — Run daily data pipeline
+
+```bash
+make daily-data                     # Fetches yesterday's OHLCV → indicators → regime
+make daily-data date=2026-03-14     # Specific date
+```
+
+### Step 8 — Start the bots
+
+```bash
+# Terminal 1 — pricing bot (polls live tickers every 60s)
+make pricing-bot
+
+# Terminal 2 — trader bot (runs strategies in 60s polling loop)
+make trader-bot market=btc/usdt
+```
+
+The pricing bot must be running for the trader bot's intraday safeguards (circuit breaker, volatility guard) to work.
+
+### Step 9 — Schedule cron jobs
+
+```bash
+python -m common.tools.manage_cron install          # Install all cron jobs
+python -m common.tools.manage_cron list              # Verify
+```
+
+Jobs installed:
+- `daily-data` — 02:00 UTC daily: OHLCV → indicators → regime scores
+- `coingecko-sync` — 01:00 UTC Sunday: refresh platforms + coins list
+
+### Step 10 — Run tests (verification)
+
+```bash
+uv run pytest tests/ -q
+```
+
+All 101 tests should pass.
 
 ---
 
@@ -543,7 +696,7 @@ Defined in `common/config.py`:
   git config --local user.email "inotives@gmail.com"
   git config --local user.name "inotives"
   ```
-- **Merged**: `feat-initial-db-migration` (all 17 migrations), `INO-0001/seeding-the-tables`, `INO-0002/pricing-bots`
+- **Merged**: `feat-initial-db-migration` (all 17 migrations), `INO-0001/seeding-the-tables`, `INO-0002/pricing-bots`, `INO-0003/restructure-compact-trading-bot`
 
 ---
 
