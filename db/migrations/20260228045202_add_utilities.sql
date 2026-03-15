@@ -5,11 +5,11 @@ CREATE EXTENSION IF NOT EXISTS "unaccent";
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 -- 1. SCHEMA SETUP
-CREATE SCHEMA IF NOT EXISTS base;
+CREATE SCHEMA IF NOT EXISTS inotives_tradings;
 
 -- 2. AUDITING: Automatic Timestamps
 -- Updates created_at/updated_at columns automatically
-CREATE OR REPLACE FUNCTION base.set_audit_fields()
+CREATE OR REPLACE FUNCTION inotives_tradings.set_audit_fields()
 RETURNS TRIGGER AS $$
 BEGIN
     IF (TG_OP = 'INSERT') THEN
@@ -24,7 +24,7 @@ $$ LANGUAGE plpgsql;
 
 -- 3. SOFT DELETE: The "Recycle Bin" Engine
 -- Intercepts DELETE commands and converts them to UPDATE
-CREATE OR REPLACE FUNCTION base.trigger_soft_delete()
+CREATE OR REPLACE FUNCTION inotives_tradings.trigger_soft_delete()
 RETURNS TRIGGER AS $$
 BEGIN
     -- Avoid infinite loops if delete is called on an already soft-deleted row
@@ -47,8 +47,8 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- 4. UNDELETE: The "Resurrection" Utility
--- Manually call this: SELECT base.undelete_record('base', 'users', 1);
-CREATE OR REPLACE FUNCTION base.undelete_record(
+-- Manually call this: SELECT inotives_tradings.undelete_record('inotives_tradings', 'users', 1);
+CREATE OR REPLACE FUNCTION inotives_tradings.undelete_record(
     target_schema text, 
     target_table text, 
     record_id bigint
@@ -72,7 +72,7 @@ $$ LANGUAGE plpgsql;
 -- Requires tables to have: version INTEGER, sys_period TSTZRANGE.
 -- History tables require extra columns: changed_at, changed_by, change_type, changes.
 -- App context for actor: SET LOCAL app.current_user_id = '<id>';
-CREATE OR REPLACE FUNCTION base.versioning()
+CREATE OR REPLACE FUNCTION inotives_tradings.versioning()
 RETURNS TRIGGER AS $$
 DECLARE
   history_table  text        := TG_ARGV[0];
@@ -136,7 +136,7 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- 6. UTILITIES: Slugify (For clean URLs/IDs)
-CREATE OR REPLACE FUNCTION base.slugify(value TEXT)
+CREATE OR REPLACE FUNCTION inotives_tradings.slugify(value TEXT)
 RETURNS TEXT AS $$
 BEGIN
   RETURN regexp_replace(
@@ -150,7 +150,7 @@ END;
 $$ LANGUAGE plpgsql STRICT IMMUTABLE;
 
 -- 7. UTILITIES: Generate Random String
-CREATE OR REPLACE FUNCTION base.random_string(length INTEGER)
+CREATE OR REPLACE FUNCTION inotives_tradings.random_string(length INTEGER)
 RETURNS TEXT AS $$
 DECLARE
   chars TEXT := 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -165,10 +165,10 @@ END;
 $$ LANGUAGE plpgsql VOLATILE;
 
 -- migrate:down
-DROP FUNCTION IF EXISTS base.random_string(INTEGER);
-DROP FUNCTION IF EXISTS base.slugify(TEXT);
-DROP FUNCTION IF EXISTS base.versioning();
-DROP FUNCTION IF EXISTS base.undelete_record(text, text, bigint);
-DROP FUNCTION IF EXISTS base.trigger_soft_delete();
-DROP FUNCTION IF EXISTS base.set_audit_fields();
-DROP SCHEMA IF EXISTS base CASCADE;
+DROP FUNCTION IF EXISTS inotives_tradings.random_string(INTEGER);
+DROP FUNCTION IF EXISTS inotives_tradings.slugify(TEXT);
+DROP FUNCTION IF EXISTS inotives_tradings.versioning();
+DROP FUNCTION IF EXISTS inotives_tradings.undelete_record(text, text, bigint);
+DROP FUNCTION IF EXISTS inotives_tradings.trigger_soft_delete();
+DROP FUNCTION IF EXISTS inotives_tradings.set_audit_fields();
+DROP SCHEMA IF EXISTS inotives_tradings CASCADE;

@@ -28,10 +28,10 @@
 --     "circuit_breaker_atr_pct": 8
 --   }
 -- -----------------------------------------------------------------------------
-CREATE TABLE base.backtest_runs (
+CREATE TABLE inotives_tradings.backtest_runs (
     id          BIGSERIAL PRIMARY KEY,
-    strategy_id BIGINT REFERENCES base.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,  -- nullable: can run without a live strategy
-    asset_id    BIGINT NOT NULL REFERENCES base.assets(id)  DEFERRABLE INITIALLY DEFERRED,
+    strategy_id BIGINT REFERENCES inotives_tradings.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,  -- nullable: can run without a live strategy
+    asset_id    BIGINT NOT NULL REFERENCES inotives_tradings.assets(id)  DEFERRABLE INITIALLY DEFERRED,
 
     name        TEXT NOT NULL,   -- e.g. 'BTC DCA Grid — normal multiplier 0.5'
     description TEXT,
@@ -69,14 +69,14 @@ CREATE TABLE base.backtest_runs (
 );
 
 -- Most common queries: results for a given asset or strategy, sorted by recency
-CREATE INDEX ON base.backtest_runs (asset_id, created_at DESC);
-CREATE INDEX ON base.backtest_runs (strategy_id, created_at DESC) WHERE strategy_id IS NOT NULL;
-CREATE INDEX ON base.backtest_runs (status);
+CREATE INDEX ON inotives_tradings.backtest_runs (asset_id, created_at DESC);
+CREATE INDEX ON inotives_tradings.backtest_runs (strategy_id, created_at DESC) WHERE strategy_id IS NOT NULL;
+CREATE INDEX ON inotives_tradings.backtest_runs (status);
 
 CREATE TRIGGER auditing_trigger_backtest_runs
-    BEFORE INSERT OR UPDATE ON base.backtest_runs
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.backtest_runs
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 
 -- migrate:down
-DROP TABLE IF EXISTS base.backtest_runs CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.backtest_runs CASCADE;

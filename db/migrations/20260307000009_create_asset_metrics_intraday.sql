@@ -7,10 +7,10 @@
 --
 -- Separate from asset_metrics_1d which carries extended market metrics
 -- (dominance, FDV, supply data) only meaningful at daily granularity.
-CREATE TABLE base.asset_metrics_intraday (
+CREATE TABLE inotives_tradings.asset_metrics_intraday (
     id          BIGSERIAL PRIMARY KEY,
-    asset_id    BIGINT NOT NULL REFERENCES base.assets(id)       DEFERRABLE INITIALLY DEFERRED,
-    source_id   BIGINT NOT NULL REFERENCES base.data_sources(id) DEFERRABLE INITIALLY DEFERRED,
+    asset_id    BIGINT NOT NULL REFERENCES inotives_tradings.assets(id)       DEFERRABLE INITIALLY DEFERRED,
+    source_id   BIGINT NOT NULL REFERENCES inotives_tradings.data_sources(id) DEFERRABLE INITIALLY DEFERRED,
     timeframe   TEXT   NOT NULL,             -- '1m' | '5m' | '15m' | '30m' | '1h' | '4h'
     candle_time TIMESTAMPTZ NOT NULL,        -- Start of the candle period (UTC)
 
@@ -35,15 +35,15 @@ CREATE TABLE base.asset_metrics_intraday (
 );
 
 -- Primary query pattern: latest N candles for a pair/timeframe (signal generation)
-CREATE INDEX ON base.asset_metrics_intraday (asset_id, source_id, timeframe, candle_time DESC);
+CREATE INDEX ON inotives_tradings.asset_metrics_intraday (asset_id, source_id, timeframe, candle_time DESC);
 
 -- Cross-asset queries at a specific time (market snapshot)
-CREATE INDEX ON base.asset_metrics_intraday (source_id, timeframe, candle_time DESC);
+CREATE INDEX ON inotives_tradings.asset_metrics_intraday (source_id, timeframe, candle_time DESC);
 
 CREATE TRIGGER auditing_trigger_asset_metrics_intraday
-    BEFORE INSERT OR UPDATE ON base.asset_metrics_intraday
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.asset_metrics_intraday
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 
 -- migrate:down
-DROP TABLE IF EXISTS base.asset_metrics_intraday CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.asset_metrics_intraday CASCADE;

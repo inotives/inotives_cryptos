@@ -8,19 +8,19 @@
 --
 -- level_trigger distinguishes levels created at cycle open from those
 -- added dynamically by the crash protection module (Section 13.5).
-ALTER TABLE base.trade_grid_levels
+ALTER TABLE inotives_tradings.trade_grid_levels
     ADD COLUMN atr_value     NUMERIC(36, 18),  -- ATR snapshot when this level was created
     ADD COLUMN atr_multiplier NUMERIC(10, 6),  -- Regime multiplier applied: 0.4 | 0.5 | 0.7
     ADD COLUMN level_trigger  TEXT NOT NULL DEFAULT 'initial';  -- 'initial' | 'crash_expansion' | 'rebalance'
 
-ALTER TABLE base.trade_grid_levels
+ALTER TABLE inotives_tradings.trade_grid_levels
     ADD CONSTRAINT chk_trade_grid_level_trigger
         CHECK (level_trigger IN ('initial', 'crash_expansion', 'rebalance'));
 
 
 -- migrate:down
-ALTER TABLE base.trade_grid_levels DROP CONSTRAINT IF EXISTS chk_trade_grid_level_trigger;
-ALTER TABLE base.trade_grid_levels
+ALTER TABLE inotives_tradings.trade_grid_levels DROP CONSTRAINT IF EXISTS chk_trade_grid_level_trigger;
+ALTER TABLE inotives_tradings.trade_grid_levels
     DROP COLUMN IF EXISTS level_trigger,
     DROP COLUMN IF EXISTS atr_multiplier,
     DROP COLUMN IF EXISTS atr_value;

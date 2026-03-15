@@ -6,11 +6,11 @@
 --
 -- The trader bot polls the latest record per (source, base_asset, quote_asset)
 -- to evaluate strategy trigger conditions.
-CREATE TABLE base.price_observations (
+CREATE TABLE inotives_tradings.price_observations (
     id             BIGSERIAL PRIMARY KEY,
-    source_id      BIGINT NOT NULL REFERENCES base.data_sources(id) DEFERRABLE INITIALLY DEFERRED,
-    base_asset_id  BIGINT NOT NULL REFERENCES base.assets(id)       DEFERRABLE INITIALLY DEFERRED,
-    quote_asset_id BIGINT NOT NULL REFERENCES base.assets(id)       DEFERRABLE INITIALLY DEFERRED,
+    source_id      BIGINT NOT NULL REFERENCES inotives_tradings.data_sources(id) DEFERRABLE INITIALLY DEFERRED,
+    base_asset_id  BIGINT NOT NULL REFERENCES inotives_tradings.assets(id)       DEFERRABLE INITIALLY DEFERRED,
+    quote_asset_id BIGINT NOT NULL REFERENCES inotives_tradings.assets(id)       DEFERRABLE INITIALLY DEFERRED,
 
     -- Price snapshot
     observed_price NUMERIC(36, 18) NOT NULL,  -- Last trade price (mid if unavailable)
@@ -29,11 +29,11 @@ CREATE TABLE base.price_observations (
 );
 
 -- Primary query pattern: latest price for a given pair on a given exchange
-CREATE INDEX ON base.price_observations (source_id, base_asset_id, quote_asset_id, observed_at DESC);
+CREATE INDEX ON inotives_tradings.price_observations (source_id, base_asset_id, quote_asset_id, observed_at DESC);
 
 -- Time-range queries across all pairs
-CREATE INDEX ON base.price_observations (observed_at DESC);
+CREATE INDEX ON inotives_tradings.price_observations (observed_at DESC);
 
 
 -- migrate:down
-DROP TABLE IF EXISTS base.price_observations CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.price_observations CASCADE;

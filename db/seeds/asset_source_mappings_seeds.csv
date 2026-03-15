@@ -1,9 +1,0 @@
-asset_code,source_code,source_identifier,source_symbol,source_name
-btc,api:coingecko,bitcoin,BTC,Bitcoin
-eth,api:coingecko,ethereum,ETH,Ethereum
-sol,api:coingecko,solana,SOL,Solana
-cro,api:coingecko,crypto-com-chain,CRO,Cronos
-btc,api:coinmarketcap,1,BTC,Bitcoin
-eth,api:coinmarketcap,1027,ETH,Ethereum
-sol,api:coinmarketcap,5426,SOL,Solana
-cro,api:coinmarketcap,3635,CRO,Cronos

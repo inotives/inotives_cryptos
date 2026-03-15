@@ -15,10 +15,10 @@
 --   OPEN    → CANCELLED (order cancelled; e.g. cycle closing early)
 --   PENDING → CANCELLED (level skipped on cycle close before order was placed)
 -- -----------------------------------------------------------------------------
-CREATE TABLE base.trade_grid_levels (
+CREATE TABLE inotives_tradings.trade_grid_levels (
     id          BIGSERIAL PRIMARY KEY,
-    cycle_id    BIGINT NOT NULL REFERENCES base.trade_cycles(id)     DEFERRABLE INITIALLY DEFERRED,
-    strategy_id BIGINT NOT NULL REFERENCES base.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,
+    cycle_id    BIGINT NOT NULL REFERENCES inotives_tradings.trade_cycles(id)     DEFERRABLE INITIALLY DEFERRED,
+    strategy_id BIGINT NOT NULL REFERENCES inotives_tradings.trade_strategies(id) DEFERRABLE INITIALLY DEFERRED,
 
     -- Grid position
     level_num   INTEGER NOT NULL,  -- 1 = nearest to market price, N = deepest level
@@ -30,7 +30,7 @@ CREATE TABLE base.trade_grid_levels (
     quantity          NUMERIC(36, 18) NOT NULL,  -- capital_allocated / target_price
 
     -- Order linkage (set once the limit order is submitted)
-    order_id   BIGINT REFERENCES base.trade_orders(id) DEFERRABLE INITIALLY DEFERRED,
+    order_id   BIGINT REFERENCES inotives_tradings.trade_orders(id) DEFERRABLE INITIALLY DEFERRED,
 
     -- Lifecycle
     status    TEXT        NOT NULL DEFAULT 'PENDING',  -- PENDING | OPEN | FILLED | CANCELLED
@@ -49,15 +49,15 @@ CREATE TABLE base.trade_grid_levels (
 );
 
 -- Primary bot query: all levels for an active cycle ordered by price
-CREATE INDEX ON base.trade_grid_levels (cycle_id, level_num);
+CREATE INDEX ON inotives_tradings.trade_grid_levels (cycle_id, level_num);
 
 -- Filter by status to find open/pending levels quickly
-CREATE INDEX ON base.trade_grid_levels (cycle_id, status);
+CREATE INDEX ON inotives_tradings.trade_grid_levels (cycle_id, status);
 
 CREATE TRIGGER auditing_trigger_trade_grid_levels
-    BEFORE INSERT OR UPDATE ON base.trade_grid_levels
-    FOR EACH ROW EXECUTE PROCEDURE base.set_audit_fields();
+    BEFORE INSERT OR UPDATE ON inotives_tradings.trade_grid_levels
+    FOR EACH ROW EXECUTE PROCEDURE inotives_tradings.set_audit_fields();
 
 
 -- migrate:down
-DROP TABLE IF EXISTS base.trade_grid_levels CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.trade_grid_levels CASCADE;

@@ -1,6 +1,6 @@
-# Inotives Cryptos
+# Inotives Tradings
 
-A personal project for building an automated crypto trading system — from raw data ingestion to live volatility-adaptive grid trading. The stack is fully containerised and data-centric, built around PostgreSQL/TimescaleDB, Python, dbt, and Prefect 3.
+A personal automated crypto trading system — from raw data ingestion to live strategy execution. Pure Python asyncio bots with cron-scheduled data pipelines, backed by a shared PostgreSQL instance.
 
 ---
 
@@ -9,43 +9,37 @@ A personal project for building an automated crypto trading system — from raw 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                          Data Sources                           │
-│        CoinGecko · CoinMarketCap · Crypto.com (ccxt)            │
+│              CoinGecko · Crypto.com · Binance (ccxt)            │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                 apps/pipelines  (Prefect 3)                      │
-│  Mon 00:00  coingecko-platforms-weekly → coingecko.raw_platforms │
-│  Mon 00:30  coingecko-coins-list-weekly → coingecko.raw_coins   │
-│  02:00 UTC  daily-data-pipeline:                                 │
-│               CoinGecko OHLCV          → base.asset_metrics_1d  │
-│               compute indicators       → base.asset_indicators_1d│
+│              common/data/  (cron-scheduled or manual)            │
+│  coingecko_sync.py → coingecko.raw_platforms + raw_coins        │
+│  ohlcv.py          → inotives_tradings.asset_metrics_1d         │
+│  indicators.py     → inotives_tradings.asset_indicators_1d      │
+│  market_regime.py  → inotives_tradings.asset_market_regime      │
+│                                                                 │
+│  bots/data_bot/main.py  (02:00 UTC cron)                    │
+│    OHLCV → indicators → regime scores                           │
 └──────────────────────────┬──────────────────────────────────────┘
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                PostgreSQL (TimescaleDB)                          │
+│          PostgreSQL (shared with inotives_aibots project)        │
 │  coingecko schema: raw_coins · raw_platforms  (CG universe)     │
-│  base schema:  networks · assets  (trading allow-list)          │
-│                data_sources · asset_source_mappings             │
-│                asset_metrics_1d · asset_indicators_1d           │
-│                price_observations · trading tables              │
-│                venue · capital_locks · portfolio_snapshots       │
+│  inotives_tradings schema:                                      │
+│    networks · assets · asset_source_mappings                    │
+│    asset_metrics_1d · asset_indicators_1d · asset_market_regime │
+│    price_observations · trade_* · capital_locks                 │
 └──────────┬──────────────────────────────────────┬───────────────┘
            │                                      │
            ▼                                      ▼
 ┌─────────────────────┐           ┌───────────────────────────────┐
-│  analytics  (dbt)   │           │  apps/bots  (Python asyncio)  │
-│  Staging + marts    │           │  pricing_bot (ticker polling) │
-│  models & metrics   │           │  trader_bot  (DCA grid)       │
-└─────────────────────┘           │  backtest    (simulation)     │
-                                  └───────────────────────────────┘
-           │
-           ▼
-┌─────────────────────────────────────────────────────────────────┐
-│               Grafana  (port 3030)                              │
-│  Market Overview · Technical Indicators · Trading Performance   │
-└─────────────────────────────────────────────────────────────────┘
+│  pricing_bot        │           │  trader_bot                   │
+│  polls tickers →    │           │  DCA Grid + Trend Following   │
+│  price_observations │           │  Hybrid regime-switching      │
+└─────────────────────┘           └───────────────────────────────┘
 ```
 
 ---
@@ -54,93 +48,94 @@ A personal project for building an automated crypto trading system — from raw 
 
 | Layer | Tool |
 |---|---|
-| Package manager | `uv` (workspace) |
-| Database | PostgreSQL 16 (TimescaleDB) |
-| Migrations | `dbmate` |
-| Transformations | `dbt` |
-| Orchestration | Prefect 3 |
+| Package manager | `uv` |
+| Database | PostgreSQL (shared, pgvector image, port 5445) |
+| Migrations | `dbmate` (via `uvx`) |
 | Exchange API | `ccxt` (Crypto.com, Binance, ...) |
-| Market data | CoinGecko · CoinMarketCap |
-| Indicator maths | `pandas-ta` |
-| Dashboards / BI | Grafana |
-| Containerisation | Docker + Docker Compose |
-| Task automation | `Makefile` |
+| Market data | CoinGecko REST API |
+| Indicator maths | `pandas` + `pandas-ta` |
+| Config | `pydantic-settings` (.env files) |
+| Task automation | `Makefile` + cron |
 
 ---
 
 ## Project Structure
 
 ```
-inotives_cryptos/
-├── analytics/                  # dbt project (staging + mart models)
-├── apps/
-│   ├── bots/                   # Trading bots (asyncio polling loops)
-│   │   ├── common/             # DB pool, exchange connections, config
-│   │   │   └── connections/    # ccxt REST wrapper + per-exchange subclasses
-│   │   │       └── paper.py    # PaperTradingConnection (simulated fills)
-│   │   ├── backtest/           # DCA grid backtesting engine
-│   │   │   ├── engine.py       # Pure-Python simulation engine
-│   │   │   ├── runner.py       # DB loader + CLI entry point
-│   │   │   └── models.py       # BacktestCandle dataclass
-│   │   ├── pricing_bot/        # Polls tickers → base.price_observations
-│   │   ├── trader_bot/         # Executes volatility-adaptive grid strategy
-│   │   │   ├── main.py         # Bot entry point (polling loop + fee sync)
-│   │   │   └── strategies/
-│   │   │       └── dca_grid.py # DcaGridStrategy (full implementation)
-│   │   └── tests/              # pytest suite for backtest + strategy
-│   └── pipelines/              # Prefect 3 scheduled data pipelines
-│       ├── src/
-│       │   ├── api/            # CoinGecko + CoinMarketCap API clients
-│       │   ├── flows/          # coingecko_platforms, coingecko_coins_list,
-│       │   │                   # coingecko_ohlcv_1d, compute_indicators_1d,
-│       │   │                   # daily_pipeline
-│       │   ├── config.py       # Settings (loaded from .env.local)
-│       │   └── main.py         # Flow import index
-│       └── prefect.yaml        # Deployment schedules (read by prefect deploy)
-├── configs/envs/               # Environment files (.env.example, .env.local)
+inotives/
+├── common/
+│   ├── config.py               # pydantic Settings — reads from .env.local
+│   ├── db.py                   # asyncpg connection pool (init_pool / get_conn)
+│   ├── connections/            # Exchange connection layer
+│   │   ├── base.py             # Abstract BaseExchangeConnection + TypedDicts
+│   │   ├── ccxt_rest.py        # Generic ccxt REST + fetch_trading_fees()
+│   │   ├── paper.py            # PaperTradingConnection (simulated fills)
+│   │   ├── __init__.py         # get_exchange() factory
+│   │   └── exchanges/
+│   │       └── cryptocom.py    # Crypto.com override
+│   ├── api/
+│   │   └── coingecko.py        # CoinGecko REST client (pure requests)
+│   ├── data/
+│   │   ├── ohlcv.py            # Daily OHLCV fetch + upsert
+│   │   ├── indicators.py       # Technical indicator computation
+│   │   ├── market_regime.py    # Regime score computation
+│   │   └── coingecko_sync.py   # CoinGecko reference sync (platforms + coins)
+│   └── tools/
+│       ├── manage_assets.py    # Asset/network/source management CLI
+│       ├── manage_trading.py   # Strategy/cycle management CLI
+│       ├── manage_cron.py      # Cron job manager (install/remove/list)
+│       ├── allowlist_asset.py  # Promote CoinGecko coin → internal allow-list
+│       ├── allowlist_network.py # Promote CoinGecko platform → internal allow-list
+│       └── setup_paper_trading.py  # Create paper trading venue + strategies
+├── bots/
+│   ├── data_bot/
+│   │   └── main.py             # Daily pipeline: OHLCV → indicators → regime
+│   ├── pricing_bot/
+│   │   └── main.py             # CLI: --exchange-id --source-code --pair
+│   └── trader_bot/
+│       ├── main.py             # Bot entry point — fee sync + polling loop
+│       ├── hybrid_coordinator.py   # Regime-based capital allocation + circuit breaker
+│       └── strategies/
+│           ├── base.py         # Abstract base strategy
+│           ├── dca_grid.py     # DcaGridStrategy (volatility-adaptive)
+│           └── trend_following.py  # TrendFollowingStrategy (momentum)
+├── tests/                      # pytest suite
+│   ├── connections/            # Exchange connection tests
+│   ├── pricing_bot/            # Pricing bot tests
+│   └── strategies/             # Strategy unit tests (DCA Grid + Trend Following)
+├── configs/envs/
+│   ├── .env.example            # Template (committed)
+│   └── .env.local              # Local secrets (gitignored — never commit)
 ├── db/
-│   ├── init/                   # Postgres init scripts (first container start only)
-│   ├── migrations/             # dbmate SQL migration files (26 total)
-│   └── seeds/                  # CSV seed data
-├── grafana/
-│   ├── provisioning/           # Auto-provisioned datasource + dashboard provider
-│   └── dashboards/             # market_overview, technical_indicators, trading_performance
-├── scripts/                    # One-off scripts (seeding, setup, management)
-│   ├── seed_data_sources_from_csv.py  # Still needed — data sources aren't from CoinGecko
-│   ├── seed_metrics_1d_from_csv.py    # Historical OHLCV backfill
-│   ├── allowlist_asset.py      # Promote CoinGecko coin → base.assets (trading allow-list)
-│   ├── allowlist_network.py    # Promote CoinGecko platform → base.networks (allow-list)
-│   ├── setup_paper_trading.py  # Create venue + strategy for paper trading
-│   ├── manage_trading.py       # Interactive CLI for strategy/cycle CRUD
-│   └── run_backtest_sweep.py   # Sweep multiple grid configs across date windows
-├── docker-compose.yml          # DB + Prefect server + fetcher worker + Grafana
-├── Makefile                    # All common dev commands
-└── pyproject.toml              # uv workspace root
+│   ├── migrations/             # dbmate SQL migration files (27 migrations)
+│   ├── scripts/                # Seeding scripts (data sources, metrics, assets, networks)
+│   └── seeds/                  # CSV seed data (historical OHLCV, source mappings)
+├── Makefile
+├── pyproject.toml
+└── pytest.ini
 ```
 
 ---
 
-## Getting Started (from scratch)
+## Getting Started
 
 ### Prerequisites
 
-- [Docker Desktop](https://www.docker.com/products/docker-desktop/) — running
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) — Python package manager
-
-```bash
-curl -LsSf https://astral.sh/uv/install.sh | sh
-```
+1. **PostgreSQL** — this project connects to the shared `inotives_aibots` database (managed by the aibots project's Docker Compose on port 5445). The database must be running before you proceed.
+2. **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — Python package manager (v0.5+)
+3. **Python 3.12+**
 
 ---
 
-### Step 1 — Clone the repository
+### Step 1 — Clone and install dependencies
 
 ```bash
-git clone git@github.com:inotives/inotives_cryptos.git
-cd inotives_cryptos
+git clone git@github-personal:inotives/inotives_cryptos.git inotives
+cd inotives
+make init
 ```
 
----
+This creates a virtual environment and installs all dependencies via `uv`.
 
 ### Step 2 — Configure environment
 
@@ -148,258 +143,342 @@ cd inotives_cryptos
 cp configs/envs/.env.example configs/envs/.env.local
 ```
 
-Edit `.env.local` and fill in your values:
+Edit `configs/envs/.env.local` with your actual values:
 
 ```env
-# Database
+# Required — database connection
 DB_HOST=localhost
-DB_PORT=5435
-DB_USER=postgres
-DB_PASSWORD=your_password
-DB_NAME=inotives_db
+DB_PORT=5445
+DB_USER=inotives
+DB_PASSWORD=your_actual_password
+DB_NAME=inotives_aibots
 
-# Exchange API keys (optional — public endpoints work without keys)
+# CoinGecko API key (free demo key works)
+COINGECKO_API_KEY=your_key
+COINGECKO_API_KEY_TYPE=demo
+
+# Exchange API keys (needed for live trading)
 CRYPTOCOM_API_KEY=your_key
 CRYPTOCOM_API_SECRET=your_secret
-
-# Market data API keys
-COINGECKO_API_KEY=your_key          # optional — free tier works without a key
-COINGECKO_API_KEY_TYPE=demo         # "demo" (free) or "pro" (paid)
-COINMARKETCAP_API_KEY=your_key
 ```
 
----
+**Where to get API keys:**
 
-### Step 3 — Install Python dependencies
-
-```bash
-make init
-```
-
-This creates a virtual environment and installs all workspace dependencies via `uv`.
-
----
-
-### Step 4 — Start Docker services
-
-```bash
-make services-up
-```
-
-Starts four containers:
-
-| Container | Purpose | Port |
+| Key | Where to get it | Notes |
 |---|---|---|
-| `inotives_db` | TimescaleDB (PostgreSQL 16) | `5435` |
-| `inotives_prefect` | Prefect 3 orchestration server | `4200` |
-| `inotives_fetcher_worker` | Prefect process worker (`data-eng-pool`) | — |
-| `inotives_grafana` | Grafana dashboards | `3030` |
+| CoinGecko | https://www.coingecko.com/en/api/pricing → sign up for free Demo plan | Free tier has rate limits but works for daily pipeline. Set `COINGECKO_API_KEY_TYPE=demo`. For paid plans, set to `pro`. |
+| Crypto.com | https://exchange.crypto.com/ → Settings → API Keys → Create API Key | Required for live trading. Public endpoints (ticker polling) work without keys. |
+| Binance | https://www.binance.com/en/my/settings/api-management | Only needed if using Binance as an exchange. |
+| CoinMarketCap | https://coinmarketcap.com/api/ → sign up for free Basic plan | Only needed if seeding historical OHLCV from CMC CSV exports. |
 
-> **Note:** On the very first run, the `prefect_internal` database is created automatically by `db/init/01_create_databases.sh`. If you restart the stack after the volume already exists, you may need to create it manually:
-> ```bash
-> docker exec inotives_db psql -U postgres -c "CREATE DATABASE prefect_internal;"
-> ```
+The database connection must be configured correctly before proceeding. Exchange keys can be added later when you're ready to trade.
 
----
-
-### Step 5 — Run database migrations
+### Step 3 — Run database migrations
 
 ```bash
 make migrate-up
 ```
 
-Applies all 26 migrations in order, building the complete `base` and `coingecko` schemas.
+Creates the `inotives_tradings` and `coingecko` schemas with all 27 migrations (tables, triggers, functions).
 
----
+Verify:
 
-### Step 6 — Bootstrap reference data
+```bash
+make migrate-status
+```
 
-Run the bootstrap target to seed data sources, sync the CoinGecko reference tables, and allow-list the default networks and assets (ETH, BTC, SOL):
+### Step 4 — Bootstrap reference data
 
 ```bash
 make bootstrap
 ```
 
-This runs five steps in sequence:
-1. Seeds `base.data_sources` (CoinGecko, CoinMarketCap, exchanges)
-2. Syncs `coingecko.raw_platforms` from CoinGecko `/asset_platforms`
-3. Syncs `coingecko.raw_coins` from CoinGecko `/coins/list`
-4. Allow-lists Ethereum, Bitcoin, Solana networks → `base.networks`
-5. Allow-lists BTC, ETH, SOL assets → `base.assets` + `base.asset_source_mappings`
+This runs a 5-step sequence:
 
-> **Note:** ETH/BTC/SOL are the recommended defaults. To add more assets or networks after bootstrap:
-> ```bash
-> make allowlist-network coingecko_id=binance-smart-chain
-> make allowlist-asset   coingecko_id=dogecoin cmc_id=74
-> ```
+| Step | What it does |
+|---|---|
+| 1 | Seeds `inotives_tradings.data_sources` (CoinGecko, CMC, exchanges) |
+| 2 | Syncs `coingecko.raw_platforms` from CoinGecko API (~150 platforms) |
+| 3 | Syncs `coingecko.raw_coins` from CoinGecko API (~13k coins) |
+| 4 | Allow-lists default networks: Ethereum, Bitcoin, Solana |
+| 5 | Allow-lists default assets: BTC, ETH, SOL |
 
----
-
-### Step 7 — Seed historical OHLCV data
-
-Seed CoinMarketCap CSV exports into `asset_metrics_1d`. The asset code and source are inferred from the filename automatically:
+After bootstrap, only BTC/ETH/SOL are in the internal allow-list. To add more assets, first search the synced CoinGecko universe to find the correct `coingecko_id`:
 
 ```bash
-# BTC — full history (2010–2026)
-make seed-metrics-1d csv=db/seeds/btc_historical_data_20100513-20260309.csv
+# Search for coins by name, symbol, or ID
+python -m common.tools.manage_assets search-coins --query dogecoin
+python -m common.tools.manage_assets search-coins --query ada
+
+# Search returns: coingecko_id, symbol, name — use the coingecko_id to allow-list
 ```
 
-Then backfill all indicators in one shot:
+Then allow-list the asset and (optionally) its network:
 
 ```bash
-uv run --env-file configs/envs/.env.local --project apps/pipelines python - <<'EOF'
-import asyncio, sys
-sys.path.insert(0, "apps/pipelines")
-from src.flows.compute_indicators_1d import compute_indicators_backfill_flow
-asyncio.run(compute_indicators_backfill_flow(asset_codes=["btc", "sol"]))
-EOF
+# Allow-list an asset (coingecko_id is required, cmc_id is optional)
+python -m common.tools.manage_assets add-asset --coingecko-id dogecoin
+python -m common.tools.manage_assets add-asset --coingecko-id cardano --cmc-id 2010
+
+# Preview before committing (dry-run)
+python -m common.tools.manage_assets add-asset --coingecko-id dogecoin --dry-run
+
+# Allow-list a network
+python -m common.tools.manage_assets add-network --coingecko-id avalanche
+
+# Or via Makefile shortcuts
+make allowlist-asset coingecko_id=dogecoin cmc_id=74
+make allowlist-network coingecko_id=binance-smart-chain code=BSC
 ```
 
----
-
-### Step 8 — Register Prefect deployments
+To see what's currently allow-listed:
 
 ```bash
-make prefect-deploy
+python -m common.tools.manage_assets list-assets
+python -m common.tools.manage_assets list-networks
 ```
 
-Registers scheduled deployments (reads `apps/pipelines/prefect.yaml`):
+### Step 5 — Seed historical data
 
-| Deployment | Schedule | Description |
+> **This step is critical.** The trading bot relies on technical indicators that require substantial historical data to compute correctly. Without backfilled data, the system **will not work properly**.
+
+**Why backfilling matters:**
+
+The indicator pipeline requires a minimum of **220 days** of daily OHLCV data per asset. If an asset has fewer than 220 days, the pipeline **skips it entirely** — no indicators, no regime score, no trading.
+
+Even CoinGecko's free-tier OHLCV endpoint only returns ~90 days of daily data. Running `make daily-data` alone gives you ~90 days at best, which means:
+
+| Indicator | Days needed | With only 90 days |
 |---|---|---|
-| `coingecko-platforms-weekly` | Mon 00:00 UTC | Sync CoinGecko platforms → `coingecko.raw_platforms` |
-| `coingecko-coins-list-weekly` | Mon 00:30 UTC | Sync CoinGecko coin list → `coingecko.raw_coins` |
-| `daily-data-pipeline` | 02:00 UTC daily | Fetch OHLCV → compute indicators |
+| SMA(200) | 200 | Not computed — NULL |
+| EMA(200) | 200 | Not computed — NULL |
+| ADX(14) | ~160 (needs EMA convergence) | Unreliable |
+| EMA slope 5d% | 205 (EMA200 + 5 days) | Not computed — NULL |
+| Regime Score | Depends on all above | Wrong or missing |
 
-Only needs to be run once, or after adding/changing flows.
+**The consequences of insufficient data:**
+- **Entry conditions fail silently** — golden cross check (`EMA50 > EMA200`) can't run if EMA200 is NULL, so the bot never enters
+- **Regime Score is wrong** — if EMA slope or vol ratio is NULL, the RS formula produces a misleading score (e.g. RS = 31.7 when it should be 65), causing the wrong strategy to get capital
+- **Grid spacing is off** — ATR(14) converges quickly but ATR% regime classification (low/normal/high) depends on `atr_sma_20` which needs 34+ days to stabilise
+- **The bot sits idle** — with missing indicators, most entry conditions fail, and the bot does nothing
 
----
+**How to backfill:**
 
-### Step 9 — Set up paper trading
+1. Download historical data from CoinMarketCap (requires free account):
+   - BTC: https://coinmarketcap.com/currencies/bitcoin/historical-data/
+   - ETH: https://coinmarketcap.com/currencies/ethereum/historical-data/
+   - SOL: https://coinmarketcap.com/currencies/solana/historical-data/
+   - Click **Download CSV** and save to `db/seeds/`
 
-Create the paper trading venue and strategies in the DB:
+2. Rename the downloaded file — the asset code must be the first segment before `_`:
+   ```
+   {asset_code}_historical_data_{YYYYMMDD}.csv
+   ```
+   Examples:
+   ```
+   btc_historical_data_20260315.csv
+   eth_historical_data_20260315.csv
+   sol_historical_data_20260315.csv
+   ```
+
+3. Seed the data and backfill indicators:
+   ```bash
+   # Import OHLCV from the CSV
+   make seed-metrics-1d csv=db/seeds/btc_historical_data_20260315.csv
+
+   # Backfill technical indicators for the imported data
+   uv run --env-file configs/envs/.env.local python -c \
+       "import asyncio; from common.data.indicators import run_indicators_backfill; asyncio.run(run_indicators_backfill(asset_codes=['btc']))"
+   ```
+
+   Repeat for each asset you want to trade.
+
+4. After backfilling, run the regime score computation:
+   ```bash
+   uv run --env-file configs/envs/.env.local python -c \
+       "import asyncio; from common.data.market_regime import run_regime_backfill; asyncio.run(run_regime_backfill())"
+   ```
+
+> **Recommendation:** Download at least 1–2 years of historical data for each asset you plan to trade. This ensures all indicators (including SMA200 and EMA200) have fully converged and the regime score is accurate from day one.
+
+### Step 6 — Run the daily data pipeline
+
+Once historical data is seeded, keep it up to date with the daily pipeline:
 
 ```bash
-make setup-paper-trading
+make daily-data                     # Fetches yesterday's data (default)
+make daily-data date=2026-03-14     # Specific date
 ```
 
-This creates:
-- A `Crypto.com (Paper)` venue row
-- A `BTC/USDT DCA Grid — Paper` strategy with `status=ACTIVE`
-- A `SOL/USDT DCA Grid — Paper` strategy with `status=ACTIVE`
+This runs: OHLCV fetch (CoinGecko) → technical indicators → market regime scores. Schedule this via cron (see Step 8) so it runs automatically.
 
-Safe to re-run — checks before inserting.
+### Step 7 — Start the bots
 
----
-
-### Step 10 — Run the bots
-
-Start both bots in separate terminals:
+Run each bot in a separate terminal:
 
 ```bash
 # Terminal 1 — pricing bot (polls live tickers every 60s)
 make pricing-bot
 
-# Terminal 2 — trader bot (executes grid strategy)
+# Terminal 2 — trader bot (runs active strategies in a 60s polling loop)
 make trader-bot
 ```
 
-The trader bot polls `base.trade_strategies` for active strategies and runs the DCA grid loop every 60 seconds. At startup it syncs live maker/taker fees from the exchange and updates any changed values in the DB. Paper trading uses `PaperTradingConnection` which simulates fills instantly without placing real orders.
+The pricing bot feeds `price_observations`, which the trader bot uses for live decision-making.
+
+### Step 8 — Schedule cron jobs
+
+Install the daily data pipeline and weekly CoinGecko sync as cron jobs:
+
+```bash
+# Preview what will be installed
+python -m common.tools.manage_cron install --dry-run
+
+# Install all cron jobs
+python -m common.tools.manage_cron install
+
+# Or install individually
+python -m common.tools.manage_cron install daily-data       # 02:00 UTC daily
+python -m common.tools.manage_cron install coingecko-sync   # 01:00 UTC weekly (Sunday)
+
+# Verify
+python -m common.tools.manage_cron list
+```
+
+Or via Makefile:
+
+```bash
+make cron-install job=daily-data
+make cron-list
+```
 
 ---
 
-### Step 11 — Open Grafana
+## Management CLIs
+
+All management scripts support dual-mode operation: **interactive** (TUI menu) and **non-interactive** (subcommands with `--json` output for automation).
+
+### Trading Management
 
 ```bash
-make grafana-ui
-# → http://localhost:3030
+# Interactive mode (TUI menu)
+make manage-trading
+
+# Non-interactive subcommands
+python -m common.tools.manage_trading list-strategies
+python -m common.tools.manage_trading list-strategies --json
+python -m common.tools.manage_trading view-strategy --strategy-id 5
+python -m common.tools.manage_trading activate --strategy-id 5
+python -m common.tools.manage_trading pause --strategy-id 5
+python -m common.tools.manage_trading update --strategy-id 5 --param risk_pct_per_trade=1.5 --param min_adx=30
+python -m common.tools.manage_trading list-cycles --strategy-id 5
+python -m common.tools.manage_trading close-cycle --cycle-id 10
 ```
 
-Default login: `admin` / `admin` (change via `GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD` in `.env.local`).
-
-The TimescaleDB datasource and all dashboards are provisioned automatically — no manual setup needed.
-
----
-
-### Step 12 — Open Prefect UI
+### Asset & Network Management
 
 ```bash
-make prefect-ui
-# → http://localhost:4200
+# Interactive mode (TUI menu)
+make manage-assets
+
+# Non-interactive subcommands
+python -m common.tools.manage_assets list-assets
+python -m common.tools.manage_assets list-assets --json
+python -m common.tools.manage_assets view-asset --code btc
+python -m common.tools.manage_assets search-coins --query dog
+python -m common.tools.manage_assets add-asset --coingecko-id dogecoin --dry-run
+python -m common.tools.manage_assets add-asset --coingecko-id dogecoin --cmc-id 74
+python -m common.tools.manage_assets remove-asset --asset-id 5
+python -m common.tools.manage_assets list-networks
+python -m common.tools.manage_assets add-network --coingecko-id avalanche
+python -m common.tools.manage_assets list-sources
+python -m common.tools.manage_assets list-mappings --asset-id 1
+python -m common.tools.manage_assets pricing-pairs
+python -m common.tools.manage_assets pricing-pairs --json
 ```
 
-From the UI you can monitor flow runs, view schedules, and trigger manual runs.
+### Cron Management
+
+```bash
+python -m common.tools.manage_cron list                  # Show active cron jobs
+python -m common.tools.manage_cron install               # Install all jobs
+python -m common.tools.manage_cron install daily-data     # Install specific job
+python -m common.tools.manage_cron remove                 # Remove all inotives jobs
+python -m common.tools.manage_cron remove coingecko-sync  # Remove specific job
+```
 
 ---
 
 ## Makefile Reference
 
-### Services
+### Setup & Migrations
 
 ```bash
-make services-up                   # Start all Docker containers
-make services-down                 # Stop all Docker containers
-```
-
-### Database
-
-```bash
-make migrate-up                    # Apply all pending migrations
-make migrate-down                  # Roll back the last migration
-make migrate-status                # Show migration status
-make migrate-new name=<name>       # Create a new migration file
+make init                             # Create venv + install dependencies
+make migrate-up                       # Apply all pending migrations
+make migrate-down                     # Roll back the last migration
+make migrate-status                   # Show migration status
+make migrate-new name=<name>          # Create a new migration file
 ```
 
 ### Bootstrap & Reference Data
 
 ```bash
-make bootstrap                     # Full initial setup: seed + sync CoinGecko + allow-list defaults
-make sync-coingecko-platforms      # Manually run platform sync (bypasses Prefect scheduler)
-make sync-coingecko-coins          # Manually run coin list sync (bypasses Prefect scheduler)
+make bootstrap                        # Full initial setup (seed + sync + allow-list defaults)
+make sync-coingecko-platforms         # Manually sync CoinGecko platforms
+make sync-coingecko-coins             # Manually sync CoinGecko coin list
+make seed-data-sources                # Seed data sources from CSV
 ```
 
-### Allow-listing Assets & Networks
+### Asset Allow-listing
 
 ```bash
-# Preview before writing
-make allowlist-asset-dry   coingecko_id=bitcoin
-make allowlist-network-dry coingecko_id=ethereum
-
-# Promote to trading allow-list
-make allowlist-asset   coingecko_id=bitcoin
-make allowlist-asset   coingecko_id=ethereum cmc_id=1027
+make allowlist-asset coingecko_id=bitcoin
+make allowlist-asset coingecko_id=ethereum cmc_id=1027
+make allowlist-asset-dry coingecko_id=bitcoin           # Preview only
 make allowlist-network coingecko_id=ethereum
-make allowlist-network coingecko_id=binance-smart-chain code=BSC
+make allowlist-network-dry coingecko_id=ethereum         # Preview only
+```
+
+### Daily Data Pipeline
+
+```bash
+make daily-data                       # Run OHLCV → indicators → regime (yesterday)
+make daily-data date=2026-03-13       # Run for specific date
 ```
 
 ### Seeding
 
 ```bash
-make seed-data-sources             # Seed base.data_sources from CSV (required once)
-make seed-metrics-1d csv=<path>    # Import daily OHLCV from a CMC CSV export
-make seed-metrics-1d-dry csv=<path>
+make seed-metrics-1d csv=<path>       # Import daily OHLCV from CMC CSV
+make seed-metrics-1d-dry csv=<path>   # Preview only
 ```
 
 ### Bots
 
 ```bash
-make pricing-bot                   # Start the pricing bot (polls tickers every 60s)
-make trader-bot                    # Start the trader bot (runs active grid strategies)
-make setup-paper-trading           # Create paper trading venue + strategies in DB
-make manage-trading                # Interactive CLI for strategy/cycle management
+make pricing-bot                      # Start pricing bot (default: Crypto.com, BTC/ETH/SOL/CRO)
+make pricing-bot exchange=binance pairs="btc/usdt eth/usdt"
+make trader-bot                       # Start trader bot (default: BTC/USDT)
+make trader-bot market=sol/usdt
 ```
 
-### Grafana
+### Management
 
 ```bash
-make grafana-ui                    # Open Grafana at http://localhost:3030
+make manage-trading                   # Trading strategy/cycle CLI (interactive)
+make manage-assets                    # Asset/network management CLI (interactive)
+make manage-assets cmd="list-assets --json"   # Non-interactive via Makefile
+make cron-list                        # Show active cron jobs
+make cron-install job=daily-data      # Install cron job
+make cron-remove job=daily-data       # Remove cron job
 ```
 
-### Prefect
+### Testing
 
 ```bash
-make prefect-deploy                # Register flow deployments (reads prefect.yaml)
-make prefect-ui                    # Open Prefect UI at http://localhost:4200
+uv run pytest tests/ -q              # Run all tests
+uv run pytest tests/strategies/ -q   # Run strategy tests only
 ```
 
 ---
@@ -410,292 +489,188 @@ make prefect-ui                    # Open Prefect UI at http://localhost:4200
 
 | Schema | Purpose |
 |---|---|
-| `coingecko` | Raw data landed directly from CoinGecko API — full universe, no curation |
-| `base` | Internal curated data — trading allow-list, metrics, indicators, trading state |
+| `coingecko` | Raw data from CoinGecko API — full universe, no curation |
+| `inotives_tradings` | Internal curated data — trading allow-list, metrics, indicators, trading state |
 
 ### Allow-list model
 
-`coingecko.raw_coins` and `coingecko.raw_platforms` hold the full CoinGecko universe (~13,000+ coins, ~500+ platforms). `base.assets` and `base.networks` are the **internal allow-lists** — only assets and networks explicitly promoted via `make allowlist-asset` / `make allowlist-network` are visible to pipelines and bots. This keeps trading operations scoped to a deliberate set of assets.
+`coingecko.raw_coins` and `coingecko.raw_platforms` hold the full CoinGecko universe (~13k coins, ~150 platforms). `inotives_tradings.assets` and `inotives_tradings.networks` are the **internal allow-lists** — only assets explicitly promoted via `make allowlist-asset` (or `python -m common.tools.manage_assets add-asset`) are visible to data modules and bots.
+
+### Key tables
+
+| Table | Purpose |
+|---|---|
+| `coingecko.raw_coins` | Full CoinGecko coin list. Synced weekly. |
+| `coingecko.raw_platforms` | Full CoinGecko platform list. Synced weekly. |
+| `inotives_tradings.assets` | Allow-listed assets for trading/tracking |
+| `inotives_tradings.networks` | Allow-listed blockchain networks |
+| `inotives_tradings.data_sources` | External data source registry |
+| `inotives_tradings.asset_source_mappings` | Maps internal asset_id → external identifiers |
+| `inotives_tradings.asset_metrics_1d` | Daily OHLCV + market cap + supply |
+| `inotives_tradings.asset_indicators_1d` | Pre-computed daily indicators (ATR, RSI, EMA, etc.) |
+| `inotives_tradings.asset_market_regime` | Daily regime scores per asset (0–100) |
+| `inotives_tradings.price_observations` | Live ticker snapshots from pricing bot |
+| `inotives_tradings.trade_strategies` | Strategy config (type, parameters, fees) |
+| `inotives_tradings.trade_cycles` | Active/closed trading cycles |
+| `inotives_tradings.trade_grid_levels` | DCA Grid level rows per cycle |
+| `inotives_tradings.trade_orders` | All placed orders |
+| `inotives_tradings.capital_locks` | Capital reserved per active cycle |
 
 ### Mutable table conventions
 
-Every mutable table follows a consistent pattern:
-
+Every mutable table has:
 - **Audit fields** — `created_at`, `updated_at`, `created_by`, `updated_by`
-- **Soft delete** — `deleted_at`, `deleted_by` (DELETE intercepted by trigger → soft delete)
+- **Soft delete** — `deleted_at`, `deleted_by` (DELETE intercepted by trigger)
 - **Versioning** — `version` counter + `sys_period` temporal range
-- **History table** — `<table>_history` captures field-level diffs on every update/delete
+- **History table** — `<table>_history` with field-level diffs
 
-Time-series tables (`asset_metrics_1d`, `asset_indicators_1d`, `price_observations`) are append/upsert only — no soft delete or versioning overhead.
-
-### Migrations
-
-| # | Migration | Description |
-|---|---|---|
-| 1 | `add_utilities` | `base` schema, audit / soft-delete / versioning trigger functions |
-| 2 | `create_users` | System users table + seed admin user |
-| 3 | `create_networks` | Blockchain networks and legacy networks (stock exchanges) |
-| 4 | `create_assets` | Crypto assets — canonical + per-network deployments in one table |
-| 5 | `create_data_sources` | External data source registry with rate-limit metadata |
-| 6 | `create_asset_metrics_1d` | Daily OHLCV, market cap, circulating supply from data sources |
-| 7 | `create_source_mappings` | Asset and network identifier mappings per external source |
-| 8 | `create_venue_tables` | Exchange accounts / wallets, balances, transfers |
-| 9 | `create_trading_tables` | Strategies, cycles, orders, executions, realised PnL |
-| 10 | `create_price_observations` | Live price snapshots from the pricing bot (1–5 min cadence) |
-| 11 | `create_capital_locks` | Capital reservation per active trading cycle + available balance view |
-| 12 | `create_asset_metrics_intraday` | Intraday OHLCV (1m · 5m · 15m · 30m · 1h · 4h) |
-| 13 | `create_system_events` | Bot operational event log (starts, stops, errors) |
-| 14 | `create_portfolio_snapshots` | Daily portfolio valuation snapshots |
-| 15 | `add_volume_to_price_observations` | Adds `volume_24h` column to price_observations |
-| 16 | `fn_upsert_data_source` | Reusable `base.upsert_data_source()` PL/pgSQL function |
-| 17 | `create_asset_indicators_1d` | Pre-computed daily technical indicators (ATR, RSI, MACD, Bollinger Bands, ...) |
-| 18 | `create_trade_grid_levels` | Grid level rows per trade cycle (price, qty, status, fill price) |
-| 19 | `add_stop_loss_price_to_trade_cycles` | Adds `stop_loss_price` column to trade_cycles |
-| 20 | `add_tuning_fields_to_trade_grid_levels` | Adds ATR, weight, regime at time of level creation |
-| 21 | `create_trade_dca_cycle_details` | Snapshot of full grid parameters per cycle |
-| 22 | `create_backtest_runs` | Stores backtest results (metrics, parameters, date range) |
-| 23 | `add_retention_policy_price_observations` | TimescaleDB hypertable + 90-day retention on price_observations |
-| 24 | `create_coingecko_schema_raw_coins` | `coingecko` schema + `raw_coins` table (full CoinGecko coin list) |
-| 25 | `create_coingecko_raw_platforms` | `coingecko.raw_platforms` table (asset platforms / blockchain networks) |
+Append-only tables (`asset_metrics_1d`, `price_observations`, `trade_executions`, etc.) have no soft delete or versioning.
 
 ---
 
-## Pipelines (Prefect 3)
+## Daily Data Pipeline
 
-All flows live in `apps/pipelines/src/flows/`. Deployments are declared in `apps/pipelines/prefect.yaml`.
+The pipeline runs as `bots/data_bot/main.py`, scheduled via cron at 02:00 UTC daily.
 
-| Flow | Schedule | Source | Target |
-|---|---|---|---|
-| `coingecko_sync_platforms_flow` | Mon 00:00 UTC | CoinGecko `/asset_platforms` | `coingecko.raw_platforms` |
-| `coingecko_sync_coins_list_flow` | Mon 00:30 UTC | CoinGecko `/coins/list` | `coingecko.raw_coins` |
-| `daily_pipeline_flow` | 02:00 UTC daily | CoinGecko `/coins/{id}/ohlc` + `/market_chart` | `base.asset_metrics_1d` → `base.asset_indicators_1d` |
-
-The `daily_pipeline_flow` sequences two sub-flows in order:
-1. `coingecko_fetch_ohlcv_1d_flow` — fetch yesterday's OHLCV + volume + market cap for all allow-listed assets
-2. `compute_indicators_daily_flow` — recompute today's indicator row for all assets
+```
+data_bot.main(target_date)
+  ├── run_ohlcv_fetch()       → inotives_tradings.asset_metrics_1d
+  ├── run_indicators_daily()  → inotives_tradings.asset_indicators_1d
+  └── run_regime_daily()      → inotives_tradings.asset_market_regime
+```
 
 ### Technical Indicators Computed
 
 | Category | Indicators |
 |---|---|
-| Volatility | ATR(14), ATR(20), ATR%, ATR SMA(20), volatility regime (`low` / `normal` / `high` / `extreme`) |
-| Trend — MA | SMA(20), SMA(50), SMA(200), EMA(12), EMA(26) |
+| Volatility | ATR(14), ATR(20), ATR%, ATR SMA(20), volatility regime |
+| Trend — MA | SMA(20), SMA(50), SMA(200), EMA(12), EMA(26), EMA(50), EMA(200) |
 | Trend — MACD | MACD line, signal(9), histogram |
-| Momentum | RSI(14) |
+| Momentum | RSI(14), ADX(14) |
 | Bands | Bollinger Bands(20, 2σ) — upper, middle, lower, width % |
-| Volume | Volume SMA(20), volume ratio (today / 20d avg) |
+| Volume | Volume SMA(20), volume ratio |
+| Regime | EMA slope 5d%, vol ratio 14d |
+
+### Market Regime Score
+
+`RS = (score_adx × 0.4) + (score_slope × 0.4) + (score_vol × 0.2)`
+
+Each component is normalised to 0–100. The final RS determines capital allocation between DCA Grid and Trend Following strategies.
 
 ---
 
-## Bots
+## Exchange Connection Layer
 
-Located in `apps/bots/`. Each bot is a standalone asyncio polling script — no Prefect.
-
-### Exchange Connection Layer
-
-`apps/bots/common/connections/` provides a unified interface over `ccxt`:
+Located in `common/connections/`.
 
 ```
 BaseExchangeConnection  (abstract)
-    └── CcxtRestConnection     (generic ccxt REST — works for any ccxt exchange)
-            ├── CryptoComConnection  (Crypto.com override: fetch_tickers quirk)
-            └── PaperTradingConnection  (wraps real connection, simulates fills)
+    └── CcxtRestConnection     (generic ccxt REST)
+            ├── CryptoComConnection  (Crypto.com override)
+            └── PaperTradingConnection  (simulated fills)
 ```
 
-Factory function:
 ```python
 from common.connections import get_exchange
-exchange = get_exchange("cryptocom")          # public endpoints, no key needed
-exchange = get_exchange("binance", api_key=..., secret=...)
-```
-
-### Pricing Bot (`apps/bots/pricing_bot/`)
-
-- Parameterised via CLI: `--exchange-id`, `--source-code`, `--pair` (repeatable)
-- Default pairs: `BTC/USDT`, `ETH/USDT`, `SOL/USDT`, `CRO/USDT` on Crypto.com
-- Writes bid, ask, last price, spread %, volume to `base.price_observations`
-- `price_observations` is a TimescaleDB hypertable with 90-day retention policy
-
-```bash
-make pricing-bot
-# or with custom pairs:
-make pricing-bot exchange=binance source=exchange:binance pairs="btc/usdt eth/usdt"
-```
-
-### Trader Bot (`apps/bots/trader_bot/`)
-
-Implements the **Volatility-Adaptive DCA Grid** strategy. One bot instance manages all active strategies concurrently, polling every 60 seconds.
-
-**At startup:** syncs live maker/taker fees from the exchange via `fetch_trading_fees()` and updates `base.trade_strategies` if the values have changed. Falls back to DB values if the sync fails.
-
-**Strategy logic:**
-
-1. **Entry conditions** (checked once per cycle):
-   - Price > SMA(200) — confirmed uptrend (configurable: `require_uptrend`)
-   - SMA(50) > SMA(200) — golden cross (configurable: `require_golden_cross`)
-   - RSI(14) < 60 — not overbought
-   - ATR% < threshold — not entering during volatility spike
-   - `force_entry: true` bypasses ALL conditions immediately
-
-2. **Defensive mode** — when in a downtrend but RSI signals a bounce:
-   - Triggers when: price < SMA200 **and** intraday RSI < `defensive_rsi_oversold` (default: 40)
-   - Opens a wider, safer grid: larger ATR multiplier (0.8), higher profit target (2.5%), fewer levels (5)
-   - Intraday RSI is fetched live from the exchange (1h candles, Wilder's smoothing)
-
-3. **Grid calibration** — ATR-based, regime-aware:
-   - `low` regime: ATR × 0.4 spacing, 1.0% profit target
-   - `normal` regime: ATR × 0.5 spacing, 1.5% profit target
-   - `high` regime: ATR × 0.7 spacing, 2.5% profit target
-   - Grid levels get weighted capital allocation (deeper = more capital)
-   - Quantity per level accounts for maker fee: `qty = capital / (price × (1 + maker_fee_pct))`
-
-4. **Exit / stop loss**:
-   - Take profit: price hits `avg_entry × (1 + profit_target%)`
-   - Stop loss: price drops > `N × ATR` below `stop_loss_price`
-   - Circuit breaker: ATR% > `circuit_breaker_atr_pct` — close cycle immediately
-
-5. **Grid expansion** — if price drops past all grid levels, the bot can add expansion levels (configurable)
-
-**Strategy parameters** are stored as JSONB in `base.trade_strategies.metadata` — edit via `make manage-trading`.
-
-```bash
-make trader-bot
+exchange = get_exchange("cryptocom")                           # public, no key
+exchange = get_exchange("cryptocom", api_key=..., secret=...)  # authenticated
+exchange = get_exchange("binance", api_key=..., secret=...)    # any ccxt exchange
 ```
 
 ---
 
-## Backtesting
+## Trader Bot
 
-The backtest module (`apps/bots/backtest/`) simulates the DCA grid strategy on historical daily candles loaded from `base.asset_metrics_1d` and `base.asset_indicators_1d`.
+### Hybrid Grid + Regime-Switching
 
-### Single backtest run
+The trader bot runs two co-operating strategies. A **Regime Score (RS 0–100)** computed daily determines capital allocation:
 
-```bash
-uv run --env-file configs/envs/.env.local --project apps/bots \
-    python -m backtest.runner \
-    --asset-id 26 \
-    --start 2023-01-01 \
-    --end 2024-12-31 \
-    --name "BTC 2023-2024 baseline" \
-    --capital 10000
-```
+| RS Range | Market State | Grid | Trend |
+|---|---|---|---|
+| 0–30 | Sideways | 100% | 0% |
+| 31–60 | Transition | sliding | sliding |
+| 61–100 | Strong Trend | 0% | 100% |
 
-Results are printed to stdout and saved to `base.backtest_runs`.
+Capital scaling is applied at cycle-open time only — existing cycles always finish with their starting capital.
 
-### Parameter sweep
+### DCA Grid Strategy
 
-Run multiple named grid configs across multiple date windows:
+- ATR-based grid spacing, regime-aware calibration (low/normal/high volatility)
+- Weighted capital allocation (deeper levels = more capital)
+- Defensive mode: wider grid when downtrend + intraday RSI bounce detected
+- Fee-corrected quantities: `qty = capital / (price × (1 + maker_fee_pct))`
+- Intraday volatility guard: pauses new fills when 4-hour price range exceeds daily ATR
 
-```bash
-# All configs × all windows
-uv run --env-file configs/envs/.env.local --project apps/bots \
-    python scripts/run_backtest_sweep.py
+### Trend Following Strategy
 
-# Specific config and window
-uv run --env-file configs/envs/.env.local --project apps/bots \
-    python scripts/run_backtest_sweep.py \
-    --config balanced --window bull_2020_2021 \
-    --asset-id 26 --capital 10000 --no-save
-```
+- Entry: EMA50 > EMA200, price > 5-day high, ADX >= 25, RS >= 61, intraday RSI < 70
+- ATR-scaled position sizing with risk % per trade
+- Rising trailing stop using live intraday ATR: `MAX(initial_stop, highest_price - ATR × multiplier)`
+- Intraday RSI guard: blocks entry when live 1-hour RSI indicates overbought conditions
 
-**Built-in configs:** `balanced`, `conservative`, `aggressive`, `deep_grid`, `scalper`, `crash_hunter`
+### Intraday Safeguards
 
-**Built-in windows:**
+Both strategies use live exchange data to compensate for the daily indicator update cycle:
 
-| Window | Range | Market |
+| Guard | Source | Used by |
 |---|---|---|
-| `bull_2020_2021` | 2020-01-01 → 2021-12-31 | Bull run |
-| `bear_2022` | 2022-01-01 → 2022-12-31 | Bear market |
-| `recovery_2023` | 2023-01-01 → 2023-12-31 | Recovery |
-| `cycle_2023_2024` | 2023-01-01 → 2024-12-31 | Full cycle |
-| `long_2020_2024` | 2020-01-01 → 2024-12-31 | Multi-cycle |
-
-### Metrics
-
-| Metric | Description |
-|---|---|
-| `total_return_pct` | Total % return over the period |
-| `max_drawdown_pct` | Largest peak-to-trough equity drop |
-| `win_rate` | % of cycles that closed profitable |
-| `sharpe_ratio` | Annualised Sharpe (√252 scaling) |
-| `profit_factor` | Gross profit ÷ gross loss |
-| `total_cycles` | Number of completed grid cycles |
-| `avg_dur_d` | Average cycle duration in days |
+| Live ATR (1h candles) | Exchange OHLCV via ccxt | Trend Following trailing stop |
+| Live RSI (1h candles) | Exchange OHLCV via ccxt | Trend Following entry guard |
+| Intraday volatility | `price_observations` 4h range vs daily ATR | DCA Grid fill pause |
+| Circuit breaker | `price_observations` daily open vs current price | Hybrid coordinator |
 
 ---
 
-## Trading Management CLI
+## Running Multiple Strategies
 
-`scripts/manage_trading.py` is an interactive menu-driven CLI for managing strategies and active cycles without touching the DB directly.
+The architecture supports running multiple strategies in parallel for the same asset. Each strategy is an independent row in `trade_strategies` with its own config, capital locks, and cycles.
+
+### Parallel strategies (works today, no code changes)
+
+You can create multiple `DCA_GRID` or `TREND_FOLLOW` strategies for the same asset with different parameters. For example, a conservative and aggressive grid side by side:
+
+| Strategy | Type | Capital | Uptrend Required | Golden Cross | Defensive RSI | Use Case |
+|---|---|---|---|---|---|---|
+| BTC Grid Conservative | `DCA_GRID` | $1,000 | Yes | Yes | < 40 | Bull/sideways markets |
+| BTC Grid Aggressive | `DCA_GRID` | $500 | No | No | < 50 | Bear market accumulation |
+| BTC Trend | `TREND_FOLLOW` | $500 | — | — | — | Strong uptrends |
+
+All three run in the same trader bot process, share the hybrid coordinator, and have independent cycles and capital locks preventing over-allocation.
+
+To set this up:
 
 ```bash
-make manage-trading
+# Create a bear-market grid via the management CLI
+python -m common.tools.manage_trading interactive
+
+# Or swap strategies on/off as market conditions change
+python -m common.tools.manage_trading pause --strategy-id 1      # pause conservative
+python -m common.tools.manage_trading activate --strategy-id 7   # activate aggressive
 ```
 
-**Capabilities:**
+### Multiple bot instances
 
-- **Strategies** — list all, view details (with full parameter set), create new (guided wizard), edit parameters, change status (`ACTIVE` / `PAUSED` / `INACTIVE`), soft-delete
-- **Cycles** — list open cycles per strategy, view cycle detail (grid levels, fill status, unrealised PnL), cancel or force-close a cycle
+You can also run separate trader bot processes for different markets:
 
----
+```bash
+# Terminal 1 — BTC strategies
+make trader-bot market=btc/usdt
 
-## Grafana Dashboards
+# Terminal 2 — SOL strategies
+make trader-bot market=sol/usdt
+```
 
-Located in `grafana/`. Provisioned automatically when the container starts — no manual import needed.
+They share the same database and capital locks table — no conflicts.
 
-| Dashboard | UID | Contents |
-|---|---|---|
-| Market Overview | `market-overview` | Live prices (pricing bot), daily OHLCV close, volume bars, latest OHLCV snapshot table |
-| Technical Indicators | `technical-indicators` | RSI(14), ATR%, ATR absolute, price vs SMA50/SMA200, MACD, latest indicator snapshot table. Asset variable filter. |
-| Trading Performance | `trading-performance` | Active strategy/cycle stat cards, open cycle table, grid level table, backtest results table, backtest return scatter |
+### Future improvement: custom strategy types
 
-**Datasource:** `inotives_db` — connects to TimescaleDB on `db:5432` using the same credentials from `.env.local`. Provisioned at `grafana/provisioning/datasources/postgres.yml`.
+Currently the system supports two strategy types (`DCA_GRID` and `TREND_FOLLOW`) with the hybrid coordinator managing capital allocation between them. Adding a new strategy type (e.g. `BEAR_GRID`, `MEAN_REVERSION`, or a short-selling strategy) requires:
 
-To add or modify dashboards, edit the JSON files in `grafana/dashboards/`. Changes are picked up within 30 seconds without restarting the container.
+1. A new strategy class in `bots/trader_bot/strategies/` implementing the `BaseStrategy` interface
+2. One-line registration in `strategies/__init__.py`
+3. Update the hybrid coordinator to include the new type in priority rules and capital splitting
 
----
-
-## Progress
-
-### Done
-
-- [x] Full database schema (25 migrations) — base + coingecko schemas, all tables, triggers live
-- [x] DB utility functions — audit fields, soft delete, field-level versioning + history tables
-- [x] `base.upsert_data_source()` reusable PL/pgSQL function
-- [x] Docker Compose — TimescaleDB + Prefect 3 server + fetcher worker + Grafana
-- [x] Prefect 3 deployment config via `prefect.yaml` with scheduled flows
-- [x] Exchange connection layer — abstract base + generic ccxt REST + Crypto.com subclass
-- [x] `PaperTradingConnection` — wraps real exchange, simulates fills for paper trading
-- [x] `fetch_trading_fees()` — live maker/taker fee sync from exchange at bot startup
-- [x] Pricing bot — parameterised CLI (`--exchange-id`, `--source-code`, `--pair`), writes to `price_observations`
-- [x] `price_observations` — TimescaleDB hypertable with 90-day retention policy
-- [x] CoinGecko raw schema — `coingecko.raw_coins` (full coin list, weekly sync) + `coingecko.raw_platforms` (platforms, weekly sync)
-- [x] CoinGecko OHLCV pipeline — fetches O/H/L/C from `/ohlc` + volume and market cap from `/market_chart`
-- [x] CoinGecko API key tiers — correct header (`x-cg-demo-api-key` vs `x-cg-pro-api-key`) selected from `COINGECKO_API_KEY_TYPE`
-- [x] Daily pipeline — OHLCV fetch → indicator computation (sequenced Prefect flow)
-- [x] Technical indicators — ATR, SMA, EMA, MACD, RSI, Bollinger Bands, Volume (via `pandas-ta`)
-- [x] Asset allow-list model — `base.assets` + `base.networks` are curated allow-lists; CoinGecko universe lives in `coingecko.*`
-- [x] `allowlist_asset.py` + `allowlist_network.py` — promote from CoinGecko raw tables to base allow-list
-- [x] `make bootstrap` — full initial reference data setup (seed → sync CG → allow-list ETH/BTC/SOL)
-- [x] BTC historical data (2010–2026) seeded + indicators backfilled
-- [x] SOL historical data (2020–2026) seeded + indicators backfilled
-- [x] Trader bot — volatility-adaptive DCA grid strategy (ATR-based spacing, weighted capital, regime-aware, fee-corrected quantities)
-- [x] Defensive grid mode — enters with wider/safer grid when downtrend + RSI bounce detected
-- [x] Intraday RSI — fetched live from exchange (1h candles, Wilder's smoothing) for defensive entry signals
-- [x] Backtest engine — pure-Python simulation, daily candle feed, equity curve, all metrics
-- [x] Backtest runner — CLI + DB loader, saves results to `base.backtest_runs`
-- [x] Parameter sweep script — 6 configs × 5 date windows, tabular output
-- [x] Paper trading setup — `setup_paper_trading.py` creates venue + BTC and SOL strategies
-- [x] Trading management CLI — `manage_trading.py` interactive strategy/cycle CRUD
-- [x] Grafana — auto-provisioned dashboards (Market Overview, Technical Indicators, Trading Performance)
-
-### Planned
-
-- [ ] **analytics (dbt)** — staging and mart models for metrics, portfolio performance
-- [ ] **Prefect + dbt** — run dbt models as part of daily pipeline
-- [ ] **Portfolio snapshots** — end-of-day automated valuation
-- [ ] **CoinMarketCap OHLCV flow** — parallel data source for metrics
-- [ ] **Additional strategies** — momentum, mean-reversion overlays
+The trader bot's dispatch loop and all database infrastructure (cycles, orders, capital locks) work automatically for any registered strategy type.
 
 ---
 
@@ -703,8 +678,28 @@ To add or modify dashboards, edit the JSON files in `grafana/dashboards/`. Chang
 
 | File | Purpose |
 |---|---|
-| `.env.example` | Template — copy to `.env.local` to get started |
-| `.env.local` | Local development (gitignored) |
-| `.env.prod` | Production (gitignored) |
+| `configs/envs/.env.example` | Template — copy to `.env.local` |
+| `configs/envs/.env.local` | Local development (gitignored — never commit) |
 
 All `.env.*` files (except `.env.example`) are gitignored. Never commit credentials.
+
+### Required variables
+
+| Variable | Example | Notes |
+|---|---|---|
+| `DB_HOST` | `localhost` | PostgreSQL host |
+| `DB_PORT` | `5445` | Mapped port from aibots project |
+| `DB_USER` | `inotives` | Database user |
+| `DB_PASSWORD` | `your_password` | Database password |
+| `DB_NAME` | `inotives_aibots` | Shared database name |
+
+### Optional variables
+
+| Variable | Default | Notes |
+|---|---|---|
+| `COINGECKO_API_KEY` | — | Free tier works without it |
+| `COINGECKO_API_KEY_TYPE` | `demo` | `demo` or `pro` (controls auth header) |
+| `CRYPTOCOM_API_KEY` | — | Needed for live trading (not paper mode) |
+| `CRYPTOCOM_API_SECRET` | — | Needed for live trading (not paper mode) |
+| `BINANCE_API_KEY` | — | If using Binance |
+| `BINANCE_API_SECRET` | — | If using Binance |

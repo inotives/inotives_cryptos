@@ -14,7 +14,7 @@
 -- -----------------------------------------------------------------------------
 
 -- 1. HEADER — one row per day
-CREATE TABLE base.portfolio_snapshots (
+CREATE TABLE inotives_tradings.portfolio_snapshots (
     id            BIGSERIAL PRIMARY KEY,
     snapshot_date DATE NOT NULL UNIQUE,  -- UTC date of the snapshot
 
@@ -28,15 +28,15 @@ CREATE TABLE base.portfolio_snapshots (
     created_at TIMESTAMPTZ  NOT NULL DEFAULT current_timestamp
 );
 
-CREATE INDEX ON base.portfolio_snapshots (snapshot_date DESC);
+CREATE INDEX ON inotives_tradings.portfolio_snapshots (snapshot_date DESC);
 
 
 -- 2. POSITIONS — one row per (snapshot × venue × asset)
-CREATE TABLE base.portfolio_snapshot_positions (
+CREATE TABLE inotives_tradings.portfolio_snapshot_positions (
     id          BIGSERIAL PRIMARY KEY,
-    snapshot_id BIGINT NOT NULL REFERENCES base.portfolio_snapshots(id) DEFERRABLE INITIALLY DEFERRED,
-    venue_id    BIGINT NOT NULL REFERENCES base.venues(id)              DEFERRABLE INITIALLY DEFERRED,
-    asset_id    BIGINT NOT NULL REFERENCES base.assets(id)              DEFERRABLE INITIALLY DEFERRED,
+    snapshot_id BIGINT NOT NULL REFERENCES inotives_tradings.portfolio_snapshots(id) DEFERRABLE INITIALLY DEFERRED,
+    venue_id    BIGINT NOT NULL REFERENCES inotives_tradings.venues(id)              DEFERRABLE INITIALLY DEFERRED,
+    asset_id    BIGINT NOT NULL REFERENCES inotives_tradings.assets(id)              DEFERRABLE INITIALLY DEFERRED,
 
     balance       NUMERIC(36, 18) NOT NULL,  -- Units held at snapshot time
     price_usd     NUMERIC(36, 18),           -- Asset price in USD at snapshot time
@@ -50,12 +50,12 @@ CREATE TABLE base.portfolio_snapshot_positions (
 );
 
 -- Trend query: value of a specific asset over time across all venues
-CREATE INDEX ON base.portfolio_snapshot_positions (asset_id, snapshot_id DESC);
+CREATE INDEX ON inotives_tradings.portfolio_snapshot_positions (asset_id, snapshot_id DESC);
 
 -- Venue drill-down: all positions at a specific venue over time
-CREATE INDEX ON base.portfolio_snapshot_positions (venue_id, snapshot_id DESC);
+CREATE INDEX ON inotives_tradings.portfolio_snapshot_positions (venue_id, snapshot_id DESC);
 
 
 -- migrate:down
-DROP TABLE IF EXISTS base.portfolio_snapshot_positions CASCADE;
-DROP TABLE IF EXISTS base.portfolio_snapshots CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.portfolio_snapshot_positions CASCADE;
+DROP TABLE IF EXISTS inotives_tradings.portfolio_snapshots CASCADE;
