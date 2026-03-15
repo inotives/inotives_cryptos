@@ -1,6 +1,6 @@
 # Inotives Tradings
 
-A personal automated crypto trading system — from raw data ingestion to live strategy execution. Pure Python asyncio bots with cron-scheduled data pipelines, backed by a shared PostgreSQL instance.
+A personal automated crypto trading system — from raw data ingestion to live strategy execution. Pure Python asyncio bots with cron-scheduled data pipelines, backed by PostgreSQL.
 
 ---
 
@@ -26,7 +26,7 @@ A personal automated crypto trading system — from raw data ingestion to live s
                            │
                            ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│          PostgreSQL (shared with inotives_aibots project)        │
+│          PostgreSQL (standalone or shared instance)               │
 │  coingecko schema: raw_coins · raw_platforms  (CG universe)     │
 │  inotives_tradings schema:                                      │
 │    networks · assets · asset_source_mappings                    │
@@ -49,7 +49,7 @@ A personal automated crypto trading system — from raw data ingestion to live s
 | Layer | Tool |
 |---|---|
 | Package manager | `uv` |
-| Database | PostgreSQL (shared, pgvector image, port 5445) |
+| Database | PostgreSQL (standalone Docker or shared instance) |
 | Migrations | `dbmate` (via `uvx`) |
 | Exchange API | `ccxt` (Crypto.com, Binance, ...) |
 | Market data | CoinGecko REST API |
@@ -110,6 +110,7 @@ inotives/
 │   ├── migrations/             # dbmate SQL migration files (27 migrations)
 │   ├── scripts/                # Seeding scripts (data sources, metrics, assets, networks)
 │   └── seeds/                  # CSV seed data (historical OHLCV, source mappings)
+├── docker-compose.yml          # Standalone PostgreSQL (used when no external DB)
 ├── Makefile
 ├── pyproject.toml
 └── pytest.ini
@@ -121,9 +122,9 @@ inotives/
 
 ### Prerequisites
 
-1. **PostgreSQL** — this project connects to the shared `inotives_aibots` database (managed by the aibots project's Docker Compose on port 5445). The database must be running before you proceed.
+1. **Python 3.12+**
 2. **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — Python package manager (v0.5+)
-3. **Python 3.12+**
+3. **Docker** — only needed if running standalone PostgreSQL (not required if you have an existing DB instance)
 
 ---
 
@@ -147,11 +148,14 @@ Edit `configs/envs/.env.local` with your actual values:
 
 ```env
 # Required — database connection
+# Option A: Standalone — leave defaults, `make db-ensure` starts a local Docker PostgreSQL
+# Option B: Shared — point to an existing PostgreSQL instance
+DB_CONTAINER_NAME=inotives_postgres
 DB_HOST=localhost
 DB_PORT=5445
 DB_USER=inotives
 DB_PASSWORD=your_actual_password
-DB_NAME=inotives_aibots
+DB_NAME=inotives
 
 # CoinGecko API key (free demo key works)
 COINGECKO_API_KEY=your_key
@@ -173,7 +177,26 @@ CRYPTOCOM_API_SECRET=your_secret
 
 The database connection must be configured correctly before proceeding. Exchange keys can be added later when you're ready to trade.
 
-### Step 3 — Run database migrations
+### Step 3 — Ensure database is running
+
+```bash
+make db-ensure
+```
+
+This does two things:
+1. **Server check** — detects if `DB_HOST:DB_PORT` is reachable. If not, starts a local Docker PostgreSQL via `docker compose`.
+2. **Database check** — creates the `DB_NAME` database if it doesn't exist on the server.
+
+Other database commands:
+
+```bash
+make db-up       # Manually start local PostgreSQL
+make db-down     # Stop local PostgreSQL
+make db-create   # Create the database (if not exists)
+make db-status   # Check if database is reachable
+```
+
+### Step 4 — Run database migrations
 
 ```bash
 make migrate-up
@@ -187,7 +210,7 @@ Verify:
 make migrate-status
 ```
 
-### Step 4 — Bootstrap reference data
+### Step 5 — Bootstrap reference data
 
 ```bash
 make bootstrap
@@ -198,10 +221,12 @@ This runs a 5-step sequence:
 | Step | What it does |
 |---|---|
 | 1 | Seeds `inotives_tradings.data_sources` (CoinGecko, CMC, exchanges) |
-| 2 | Syncs `coingecko.raw_platforms` from CoinGecko API (~150 platforms) |
-| 3 | Syncs `coingecko.raw_coins` from CoinGecko API (~13k coins) |
-| 4 | Allow-lists default networks: Ethereum, Bitcoin, Solana |
+| 2 | Syncs `coingecko.raw_platforms` from CoinGecko API (~440 platforms) |
+| 3 | Syncs `coingecko.raw_coins` from CoinGecko API (~18k coins) |
+| 4 | Allow-lists default networks: Ethereum, Solana |
 | 5 | Allow-lists default assets: BTC, ETH, SOL |
+
+> **Note:** Bitcoin is not a smart-contract platform, so it has no entry in CoinGecko's platform list. Only Ethereum and Solana are allow-listed as networks by default. BTC is still allow-listed as an asset for trading.
 
 After bootstrap, only BTC/ETH/SOL are in the internal allow-list. To add more assets, first search the synced CoinGecko universe to find the correct `coingecko_id`:
 
@@ -238,7 +263,7 @@ python -m common.tools.manage_assets list-assets
 python -m common.tools.manage_assets list-networks
 ```
 
-### Step 5 — Seed historical data
+### Step 6 — Seed historical data
 
 > **This step is critical.** The trading bot relies on technical indicators that require substantial historical data to compute correctly. Without backfilled data, the system **will not work properly**.
 
@@ -301,7 +326,7 @@ Even CoinGecko's free-tier OHLCV endpoint only returns ~90 days of daily data. R
 
 > **Recommendation:** Download at least 1–2 years of historical data for each asset you plan to trade. This ensures all indicators (including SMA200 and EMA200) have fully converged and the regime score is accurate from day one.
 
-### Step 6 — Run the daily data pipeline
+### Step 7 — Run the daily data pipeline
 
 Once historical data is seeded, keep it up to date with the daily pipeline:
 
@@ -312,7 +337,7 @@ make daily-data date=2026-03-14     # Specific date
 
 This runs: OHLCV fetch (CoinGecko) → technical indicators → market regime scores. Schedule this via cron (see Step 8) so it runs automatically.
 
-### Step 7 — Start the bots
+### Step 8 — Start the bots
 
 Run each bot in a separate terminal:
 
@@ -326,7 +351,7 @@ make trader-bot
 
 The pricing bot feeds `price_observations`, which the trader bot uses for live decision-making.
 
-### Step 8 — Schedule cron jobs
+### Step 9 — Schedule cron jobs
 
 Install the daily data pipeline and weekly CoinGecko sync as cron jobs:
 
@@ -411,10 +436,20 @@ python -m common.tools.manage_cron remove coingecko-sync  # Remove specific job
 
 ## Makefile Reference
 
-### Setup & Migrations
+### Setup & Database
 
 ```bash
 make init                             # Create venv + install dependencies
+make db-ensure                        # Auto-detect DB server + create database if needed
+make db-up                            # Manually start local Docker PostgreSQL
+make db-down                          # Stop local Docker PostgreSQL
+make db-create                        # Create database on server (if not exists)
+make db-status                        # Check if database server is reachable
+```
+
+### Migrations
+
+```bash
 make migrate-up                       # Apply all pending migrations
 make migrate-down                     # Roll back the last migration
 make migrate-status                   # Show migration status
@@ -687,11 +722,12 @@ All `.env.*` files (except `.env.example`) are gitignored. Never commit credenti
 
 | Variable | Example | Notes |
 |---|---|---|
+| `DB_CONTAINER_NAME` | `inotives_postgres` | Docker container name (used by `make db-create`) |
 | `DB_HOST` | `localhost` | PostgreSQL host |
-| `DB_PORT` | `5445` | Mapped port from aibots project |
+| `DB_PORT` | `5445` | PostgreSQL mapped port |
 | `DB_USER` | `inotives` | Database user |
 | `DB_PASSWORD` | `your_password` | Database password |
-| `DB_NAME` | `inotives_aibots` | Shared database name |
+| `DB_NAME` | `inotives` | Database name (schemas live inside this DB) |
 
 ### Optional variables
 

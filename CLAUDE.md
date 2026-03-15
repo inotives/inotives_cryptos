@@ -14,7 +14,7 @@ The goal is a self-contained, fully automated pipeline that:
 3. **Monitors** live prices via exchange APIs (Crypto.com, Binance via `ccxt`)
 4. **Executes** a **Hybrid Grid + Regime-Switching strategy** — DCA Grid for sideways markets, Trend Following for uptrends, with a regime score (0–100) dynamically allocating capital between them
 
-The system is personal/research-scale. No SaaS, no multi-user. Shares a PostgreSQL instance with the `inotives_aibots` project (separate schemas). Python asyncio bots, cron-scheduled data pipeline.
+The system is personal/research-scale. No SaaS, no multi-user. Runs its own PostgreSQL (standalone Docker) or can share an existing instance (e.g. `inotives_aibots` project). Python asyncio bots, cron-scheduled data pipeline.
 
 ---
 
@@ -89,9 +89,9 @@ bots/ (asyncio)
 - `dbmate` — SQL-first migrations (invoked via `uvx`)
 
 **Infrastructure:**
-- PostgreSQL is provided by the `inotives_aibots` project (pgvector image, port 5445)
-- No local Docker services — this project is a pure Python app
-- DB connection configured via `.env.local` pointing to the shared Postgres instance
+- PostgreSQL — standalone Docker (`make db-up`) or shared with `inotives_aibots` project
+- `make db-ensure` auto-detects: uses existing DB if reachable, otherwise starts local Docker PostgreSQL (pgvector image)
+- DB connection configured via `.env.local`
 
 ---
 
@@ -147,6 +147,7 @@ inotives/
 │   ├── migrations/         # dbmate SQL files
 │   ├── scripts/            # Seeding scripts (data sources, metrics, assets, networks)
 │   └── seeds/              # CSV data files for seeding
+├── docker-compose.yml          # Standalone PostgreSQL (used when no external DB)
 ├── Makefile
 └── pyproject.toml              # Single flat project (no workspace)
 ```
@@ -163,9 +164,13 @@ inotives/
 
 ## Database
 
-### Shared PostgreSQL instance
+### PostgreSQL setup
 
-This project shares a PostgreSQL instance with the `inotives_aibots` project. The DB is managed by the aibots project's Docker Compose (pgvector image on port 5445). This project connects as a client — no local DB container.
+This project can run in two modes:
+- **Standalone** — `make db-up` starts a local Docker PostgreSQL (pgvector image). `make db-down` stops it.
+- **Shared** — connects to an existing PostgreSQL instance (e.g. the `inotives_aibots` project's DB on port 5445).
+
+`make db-ensure` auto-detects: if the configured `DB_HOST:DB_PORT` is reachable, it uses that instance. Otherwise, it starts a local Docker PostgreSQL via `docker compose`. It also creates the `DB_NAME` database if it doesn't exist on the server (`make db-create`).
 
 ### Schema layout
 
@@ -462,6 +467,13 @@ uv run --env-file configs/envs/.env.local python -c \
 ## Makefile Commands
 
 ```bash
+# Database
+make db-ensure                      # Auto-detect DB server + create database if needed
+make db-up                          # Start local Docker PostgreSQL
+make db-down                        # Stop local Docker PostgreSQL
+make db-create                      # Create database on server (if not exists)
+make db-status                      # Check if database server is reachable
+
 # Migrations
 make migrate-up                     # Apply all pending migrations
 make migrate-down                   # Roll back last migration
@@ -506,11 +518,11 @@ Defined in `common/config.py`:
 
 | Field | Env var | Notes |
 |---|---|---|
-| `db_host` | `DB_HOST` | `postgres` (Docker service name) or `localhost` |
-| `db_port` | `DB_PORT` | `5445` (mapped port from aibots project) |
+| `db_host` | `DB_HOST` | `localhost` (standalone or shared) |
+| `db_port` | `DB_PORT` | `5445` (default mapped port) |
 | `db_user` | `DB_USER` | `inotives` |
 | `db_password` | `DB_PASSWORD` | Note: field is `db_password`, NOT `db_pass` |
-| `db_name` | `DB_NAME` | `inotives_aibots` (shared database) |
+| `db_name` | `DB_NAME` | `inotives` (standalone) or `inotives_aibots` (shared) |
 | `cryptocom_api_key` | `CRYPTOCOM_API_KEY` | Optional — public endpoints work without it |
 | `cryptocom_api_secret` | `CRYPTOCOM_API_SECRET` | |
 | `binance_api_key` | `BINANCE_API_KEY` | |
@@ -538,7 +550,7 @@ Defined in `common/config.py`:
 ## Known Gotchas
 
 - **`db_password` not `db_pass`** — pydantic field was renamed to match `DB_PASSWORD` env var. Do not revert.
-- **Shared DB with aibots** — this project uses `inotives_tradings` and `coingecko` schemas inside the `inotives_aibots` database. Do not modify schemas owned by other projects.
+- **Shared DB mode** — when sharing the `inotives_aibots` database with the aibots project, this project uses `inotives_tradings` and `coingecko` schemas. Do not modify schemas owned by other projects. In standalone mode, the entire database is ours.
 - **CoinGecko OHLCV granularity** — free tier `/ohlc?days=N` returns daily candles only when `days >= 90`. Module uses `days=90` and filters to the target date.
 - **CoinGecko market chart granularity** — free/demo tier requires `days > 90` for daily granularity. Module uses `days=91`. Pro tier sends `interval=daily` explicitly.
 - **CoinGecko API key headers** — Demo key uses `x-cg-demo-api-key`. Pro key uses `x-cg-pro-api-key`. Using the wrong header silently ignores the key. Controlled by `COINGECKO_API_KEY_TYPE` env var.

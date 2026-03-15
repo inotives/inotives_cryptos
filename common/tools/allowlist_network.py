@@ -25,6 +25,7 @@ Usage:
 
 import argparse
 import asyncio
+import json
 import sys
 
 import asyncpg
@@ -112,10 +113,10 @@ async def run(args: argparse.Namespace) -> None:
             cg_source_id,
             platform["coingecko_id"],
             platform["name"],
-            str({
+            json.dumps({
                 "chain_identifier": platform["chain_identifier"],
                 "native_coin_id":   platform["native_coin_id"],
-            }).replace("'", '"'),
+            }),
         )
         print(f"✓ inotives_tradings.network_source_mappings: {COINGECKO_SOURCE_CODE} → '{platform['coingecko_id']}'")
 

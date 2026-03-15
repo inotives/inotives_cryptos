@@ -1,0 +1,31 @@
+# Standalone PostgreSQL for inotives trading system.
+# Used when no external database is available (e.g. the shared inotives_aibots DB).
+#
+# Usage:
+#   make db-up       # start local PostgreSQL
+#   make db-down     # stop and remove container
+#   make db-ensure   # auto-detect: use existing DB or start local one
+#
+# Reads DB_* variables from your .env file (configs/envs/.env.local).
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: inotives_postgres
+    restart: unless-stopped
+    ports:
+      - "${DB_PORT:-5445}:5432"
+    environment:
+      POSTGRES_USER: ${DB_USER:-inotives}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-changed_me}
+      POSTGRES_DB: ${DB_NAME:-inotives}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-inotives} -d ${DB_NAME:-inotives}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
